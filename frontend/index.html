@@ -1,0 +1,1548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NAS Gallery - Sakura+ Edition</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- EXIF 解析 -->
+    <script src="https://cdn.jsdelivr.net/npm/exifr/dist/full.umd.js"></script>
+    <!-- Markdown 解析引擎 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- 引入 APlayer 音乐播放器 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script>
+    <!-- 引入 MetingJS -->
+    <script src="https://cdn.jsdelivr.net/npm/meting@2/dist/Meting.min.js"></script>
+
+    <!-- 引入 Leaflet 地图引擎 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <style>
+        .perspective-\[1500px\] { perspective: 1500px; }
+        .transform-style-3d { transform-style: preserve-3d; }
+        .will-change-transform { will-change: transform; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(150, 150, 150, 0.3); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(150, 150, 150, 0.5); }
+        body { margin: 0; padding: 0; overflow: hidden; }
+        video.grid-video::-webkit-media-controls { display: none !important; }
+        .hide-scroll::-webkit-scrollbar { display: none; }
+        
+        .markdown-body p { margin-bottom: 0.5em; line-height: 1.6; }
+        .markdown-body strong { color: #3b82f6; font-weight: bold; }
+        .markdown-body ul { list-style-type: disc; padding-left: 1.5em; margin-bottom: 0.5em; }
+        .markdown-body ol { list-style-type: decimal; padding-left: 1.5em; margin-bottom: 0.5em; }
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 { font-weight: bold; margin-top: 1em; margin-bottom: 0.5em; color: #3b82f6; }
+        
+        .aplayer.aplayer-fixed { z-index: 9999 !important; }
+        .leaflet-container { font-family: inherit; z-index: 1; background: transparent; }
+        .custom-map-marker { background: none; border: none; }
+
+        /* === 至尊收藏室 (Mythic Vault) CSS === */
+        @keyframes vault-rotate {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .vault-glow-wrap {
+            position: relative; overflow: hidden; border-radius: 0.75rem; 
+            background-color: #0f172a; 
+            transition: box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), filter 0.3s ease;
+        }
+        .vault-glow-wrap::before {
+            content: ""; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%;
+            background: conic-gradient(transparent, rgba(255,255,255,0.05), transparent 20%);
+            animation: vault-rotate 8s linear infinite; transition: background 0.4s ease;
+        }
+        .vault-glow-wrap:hover::before {
+            background: conic-gradient(transparent, var(--vault-color), transparent 25%);
+            animation: vault-rotate 1.2s linear infinite;
+        }
+        .vault-glow-wrap:hover {
+            box-shadow: 0 0 40px -5px var(--vault-color), inset 0 0 20px var(--vault-color); z-index: 20;
+        }
+        .vault-img-container {
+            position: absolute; inset: 3px; border-radius: 0.6rem; background: #000; overflow: hidden; z-index: 1;
+        }
+        .vault-img-container img, .vault-img-container video {
+            opacity: 0.65; filter: grayscale(30%); transition: all 0.4s ease;
+        }
+        .vault-glow-wrap:hover .vault-img-container img, .vault-glow-wrap:hover .vault-img-container video {
+            opacity: 1; filter: grayscale(0%) brightness(1.1);
+        }
+        @keyframes epic-flash {
+            0% { opacity: 0.8; transform: scale(0.8); }
+            100% { opacity: 0; transform: scale(1.5); }
+        }
+        .vault-open-flash {
+            position: absolute; inset: 0; pointer-events: none; z-index: 10;
+            background: radial-gradient(circle at center, var(--vault-color) 0%, transparent 60%);
+            animation: epic-flash 0.8s cubic-bezier(0.1, 0.8, 0.2, 1) forwards; mix-blend-mode: screen;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+        const API_BASE = `http://${window.location.hostname}:3001/api`;
+
+        const dbAPI = {
+          async addPhoto(photoData) {
+            const res = await fetch(`${API_BASE}/photos`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(photoData) });
+            if (!res.ok) throw new Error('上传失败'); return res.json();
+          },
+          async updatePhoto(id, updateData) {
+            const res = await fetch(`${API_BASE}/photos/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updateData) });
+            if (!res.ok) throw new Error('更新失败'); return res.json();
+          },
+          async deletePhoto(id) {
+            const res = await fetch(`${API_BASE}/photos/${id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error('删除失败'); return res.json();
+          },
+          async getAllPhotos() {
+            const res = await fetch(`${API_BASE}/photos`);
+            if (!res.ok) throw new Error('获取失败');
+            return await res.json();
+          }
+        };
+
+        const Icons = {
+            Menu: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>,
+            Photos: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>,
+            Video: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>,
+            Image: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>,
+            Wall3D: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>,
+            Map: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"></polygon><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line></svg>,
+            MapPin: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>,
+            Settings: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>,
+            Upload: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>,
+            Close: () => <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>,
+            Heart: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>,
+            HeartSolid: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" className="text-red-500"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>,
+            Trash: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>,
+            FolderPlus: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>,
+            Folder: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>,
+            GridIcon: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>,
+            Sparkles: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"></path></svg>,
+            Maximize: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>,
+            Minimize: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>,
+            Search: () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>,
+            Lock: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>,
+            TrashRestore: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10"></polyline><polyline points="23 20 23 14 17 14"></polyline><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path></svg>,
+            CheckCircle: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" className="text-blue-500"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01" stroke="white" strokeWidth="3"></polyline></svg>,
+            Circle: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-white/70"><circle cx="12" cy="12" r="10"></circle></svg>,
+            ChevronLeft: () => <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"></polyline></svg>,
+            ChevronRight: () => <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"></polyline></svg>,
+            Refresh: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>,
+            Edit: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>,
+            Music: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>,
+            Diamond: () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-current"><path d="M2.7 10.3a2.41 2.41 0 0 0 0 3.41l7.59 7.59a2.41 2.41 0 0 0 3.42 0l7.59-7.59a2.41 2.41 0 0 0 0-3.41l-7.59-7.59a2.41 2.41 0 0 0-3.42 0Z"/></svg>
+        };
+
+        // ==========================================
+        // 核心全局常量与工具函数（确保只声明一次！）
+        // ==========================================
+        const parseMetadata = (analysisStr) => {
+            const def = { text: "未生成 AI 描述或未开启自动生成。", mimeType: 'image/jpeg', exif: null, isFavorite: false, inVault: false, albums: [], deletedAt: null, isPrivate: false, manualLat: null, manualLng: null };
+            if (!analysisStr) return def;
+            try { if (analysisStr.startsWith('{')) return { ...def, ...JSON.parse(analysisStr), albums: JSON.parse(analysisStr).albums || [] }; } catch (e) {}
+            return { ...def, text: analysisStr };
+        };
+
+        const getProfessionalPrompt = () => {
+            return "分析此图，并使用优美的 Markdown 格式排版（支持加粗、列表等）。\n请严格包含以下维度：\n1. **核心与细节**：精准描述画面主体、动作与关键细节。\n2. **光影与氛围**：简述场景、色彩倾向与画面情绪。\n3. **文化与深意（重点）**：如果这是一张梗图(Meme)、二次元作品、知名人物或影视名场面，请务必明确指出其背后的文化内涵、梗的出处或幽默点；若是普通摄影作品，请提炼其艺术美感。\n要求：保持语言专业严谨，拒绝写小说般的冗长废话，总字数必须控制在150字到250字左右。";
+        };
+
+        const DEFAULT_CONFIG = {
+            apiBaseUrl: 'https://api.openai.com/v1', apiModel: 'gpt-4o-mini', apiKey: '', autoGenerateAI: true,
+            theme: 'dark', bgImage: '', bgOpacity: 0.85, blurLevel: 30, privacyPin: '', 
+            appIconType: 'text', appIconText: '🌸', appIconImage: '', appIconShape: 'rounded-lg', 
+            enableSakura: false, sakuraSpeed: 1.0, sakuraType: 'realistic', 
+            bgmEnabled: false, bgmType: 'netease_playlist', bgmId: '2269829035', bgmAudioUrl: '',
+            vaultName: '至尊收藏室', vaultColor: '#ef4444', 
+            vaultSound: 'https://cdn.pixabay.com/audio/2022/03/15/audio_c8b8f7eb3e.mp3', 
+            vaultOpenSound: 'https://cdn.pixabay.com/audio/2024/09/09/audio_24da2d10ae.mp3',
+            albums: [ { id: '3d-wall-default', name: '探索 3D 墙', viewType: '3d' } ]
+        };
+
+        const SMART_ALBUMS = {
+            'people': { name: '人物/合影', icon: '🧑', keywords: ['人', '脸', '男', '女', 'portrait', 'people', 'person', '孩', '合影', '微笑'] },
+            'pets': { name: '宠物乐园', icon: '🐱', keywords: ['猫', '狗', 'cat', 'dog', '宠物', 'pet', '喵', '汪'] },
+            'documents': { name: '证件与卡片', icon: '📇', keywords: ['身份证', '证件', '卡片', 'id card', 'document', '护照', '名片', '文件', '文字', '发票', '收据'] }
+        };
+
+        // ==========================================
+        // 全局组件 (音乐引擎 & 粒子特效)
+        // ==========================================
+        function BGMEngine({ config }) {
+            const [isExpanded, setIsExpanded] = useState(true);
+            if (!config.bgmEnabled) return null;
+            const isAudio = config.bgmType === 'audio';
+            const isPlaylist = config.bgmType === 'netease_playlist';
+            const innerHeight = isPlaylist ? 90 : 66;
+            const outerHeight = isPlaylist ? 110 : 86;
+
+            return (
+                <div className={`fixed bottom-6 right-0 z-[9999] flex items-end transition-transform duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${isExpanded ? '-translate-x-6' : 'translate-x-full'}`}>
+                    <button onClick={() => setIsExpanded(!isExpanded)} className={`absolute -left-10 bottom-3 w-10 h-10 rounded-l-xl backdrop-blur-xl shadow-[-5px_0_15px_rgba(0,0,0,0.15)] flex items-center justify-center transition-all duration-300 group ${config.theme === 'dark' ? 'bg-slate-800/90 text-blue-400 border-y border-l border-white/10' : 'bg-white/90 text-blue-500 border-y border-l border-black/5'} ${isExpanded ? 'opacity-40 hover:opacity-100 hover:w-12 hover:-left-12' : 'opacity-100 hover:w-12 hover:-left-12'}`} title={isExpanded ? "隐藏播放器" : "展开播放器"}>
+                        <div className={`transition-transform duration-500 ${isExpanded ? 'rotate-0' : 'scale-110'} group-hover:scale-110`}><Icons.Music /></div>
+                    </button>
+                    <div className={`transition-all duration-300 shadow-[0_20px_50px_rgba(0,0,0,0.4)] rounded-xl overflow-hidden origin-bottom-right ${isExpanded ? 'opacity-90 hover:opacity-100 hover:scale-105' : 'opacity-100'} ${config.theme === 'dark' ? 'bg-slate-900/60' : 'bg-white/40'} backdrop-blur-md`}>
+                        {isAudio ? (<audio src={config.bgmAudioUrl} controls autoPlay loop className="h-12 bg-white/80 backdrop-blur-md px-2"></audio>) : (<iframe frameBorder="no" border="0" marginWidth="0" marginHeight="0" width="330" height={outerHeight} src={`https://music.163.com/outchain/player?type=${isPlaylist ? 0 : 2}&id=${config.bgmId || '2269829035'}&auto=1&height=${innerHeight}`}></iframe>)}
+                    </div>
+                </div>
+            );
+        }
+
+        function SakuraEffect({ config }) {
+            useEffect(() => {
+                const canvas = document.getElementById('sakura-canvas');
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                let w = canvas.width = window.innerWidth;
+                let h = canvas.height = window.innerHeight;
+                
+                const type = config.sakuraType || 'realistic';
+                const speed = config.sakuraSpeed || 1.0;
+
+                const petalImg = new Image();
+                const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 35"><defs><linearGradient id="g" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#ffb7c5" /><stop offset="100%" stop-color="#ffe6eb" /></linearGradient></defs><path fill="url(#g)" d="M15,35 C5,25 0,15 2,8 C4,1 12,0 15,5 C18,0 26,1 28,8 C30,15 25,25 15,35 Z" /></svg>`;
+                petalImg.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgStr);
+                
+                const count = type === 'snow' ? 80 : 45;
+                const petals = Array.from({length: count}).map(() => ({
+                    x: Math.random() * w, y: Math.random() * h - h, s: Math.random() * 0.4 + 0.25, r: Math.random() * 360, vx: (Math.random() * 1.5 - 0.5) * speed, vy: (Math.random() * 1.2 + 0.8) * speed, rx: (Math.random() * 2 - 1) * speed, flip: Math.random() * Math.PI * 2, flipSpeed: (Math.random() * 0.05 + 0.02) * speed, sway: Math.random() * Math.PI * 2, swaySpeed: (Math.random() * 0.03 + 0.01) * speed
+                }));
+                
+                let frame;
+                const draw = () => {
+                    ctx.clearRect(0, 0, w, h);
+                    petals.forEach(p => {
+                        p.x += p.vx + Math.sin(p.sway) * 1.5 * speed; p.y += p.vy; p.r += p.rx; p.flip += p.flipSpeed; p.sway += p.swaySpeed;
+                        if(p.y > h + 35) { p.y = -35; p.x = Math.random() * w; }
+                        if(p.x > w + 35) p.x = -35; else if(p.x < -35) p.x = w + 35;
+                        ctx.save(); ctx.translate(p.x, p.y);
+                        if (type === 'realistic') {
+                            ctx.rotate(p.r * Math.PI / 180); ctx.scale(Math.sin(p.flip), 1); ctx.shadowBlur = 6 * p.s; ctx.shadowColor = 'rgba(255, 183, 197, 0.8)'; ctx.globalAlpha = 0.85; ctx.drawImage(petalImg, -15 * p.s, -17.5 * p.s, 30 * p.s, 35 * p.s);
+                        } else if (type === 'simple') {
+                            ctx.rotate(p.r * Math.PI / 180); ctx.scale(Math.sin(p.flip), 1); ctx.beginPath(); ctx.ellipse(0, 0, 8 * p.s, 14 * p.s, 0, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255, 183, 197, 0.8)'; ctx.fill();
+                        } else if (type === 'snow') {
+                            ctx.beginPath(); ctx.arc(0, 0, 3 * p.s, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'; ctx.shadowBlur = 8 * p.s; ctx.shadowColor = 'rgba(255, 255, 255, 1)'; ctx.fill();
+                        }
+                        ctx.restore();
+                    });
+                    frame = requestAnimationFrame(draw);
+                };
+                if (type === 'realistic') petalImg.onload = () => draw(); else draw();
+                
+                const handleResize = () => { w = canvas.width = window.innerWidth; h = canvas.height = window.innerHeight; };
+                window.addEventListener('resize', handleResize);
+                return () => { cancelAnimationFrame(frame); window.removeEventListener('resize', handleResize); };
+            }, [config.sakuraSpeed, config.sakuraType]);
+            return <canvas id="sakura-canvas" className="fixed inset-0 pointer-events-none z-[5]"></canvas>;
+        }
+
+        // ==========================================
+        // Grid 视图组件
+        // ==========================================
+        const PhotoGridItem = React.memo(({ photo, isSelected, isSelectionMode, onToggleSelect, onSelect, config }) => {
+            const meta = parseMetadata(photo.analysis);
+            const isVideo = meta.mimeType?.startsWith('video/');
+            
+            return (
+                <div onClick={() => isSelectionMode ? onToggleSelect(photo.id) : onSelect(photo)}
+                    className={`aspect-square bg-black/5 dark:bg-white/5 rounded-sm md:rounded-lg overflow-hidden cursor-pointer group relative transition-all duration-200 will-change-transform ${isSelected ? 'scale-90 rounded-xl ring-4 ring-blue-500 shadow-[0_10px_30px_rgba(59,130,246,0.5)]' : 'hover:shadow-md'}`}>
+                    {isVideo ? 
+                        <video src={photo.url} className="w-full h-full object-cover grid-video" /> : 
+                        <img src={photo.url} className="w-full h-full object-cover" loading="lazy" decoding="async" />
+                    }
+                    <div className={`absolute inset-0 transition-opacity pointer-events-none ${config.theme === 'dark' ? 'bg-black/20 opacity-0 group-hover:opacity-100' : 'bg-white/10 opacity-0 group-hover:opacity-100'}`}></div>
+                    {(isSelectionMode || isSelected) && (
+                        <div className="absolute top-2 left-2 z-20 cursor-pointer drop-shadow-md text-white mix-blend-difference pointer-events-auto" 
+                             onClick={(e) => { e.stopPropagation(); onToggleSelect(photo.id); }}>
+                            {isSelected ? <Icons.CheckCircle /> : <Icons.Circle />}
+                        </div>
+                    )}
+                    <div className="absolute top-2 right-2 flex flex-col gap-1 drop-shadow-md pointer-events-none">
+                        {meta.inVault && <div className="text-[var(--vault-color)] drop-shadow-[0_0_5px_var(--vault-color)]" style={{'--vault-color': config.vaultColor}}><Icons.Diamond /></div>}
+                        {meta.isFavorite && <div className="text-red-500 drop-shadow-lg"><Icons.HeartSolid /></div>}
+                        {meta.isPrivate && <div className="text-white/90 drop-shadow-lg"><Icons.Lock /></div>}
+                    </div>
+                    {isVideo && <div className="absolute bottom-1 right-1 p-1 bg-black/60 rounded text-white text-xs pointer-events-none backdrop-blur-md"><Icons.Video /></div>}
+                </div>
+            );
+        }, (prevProps, nextProps) => {
+            return prevProps.isSelected === nextProps.isSelected && 
+                   prevProps.isSelectionMode === nextProps.isSelectionMode && 
+                   prevProps.photo.analysis === nextProps.photo.analysis &&
+                   prevProps.photo.id === nextProps.photo.id;
+        });
+
+        const VaultGridItem = React.memo(({ photo, isSelected, isSelectionMode, onToggleSelect, onSelect, config }) => {
+            const meta = parseMetadata(photo.analysis);
+            const isVideo = meta.mimeType?.startsWith('video/');
+            
+            const playHoverSound = () => {
+                if(!config.vaultSound) return;
+                try { const audio = new window.Audio(config.vaultSound); audio.volume = 0.6; audio.play().catch(()=>{}); } catch(e) {}
+            };
+
+            const handleMouseMove = (e) => {
+                if (isSelectionMode) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+                const rotateX = ((centerY - y) / centerY) * 15; 
+                const rotateY = ((x - centerX) / centerX) * 15;
+                e.currentTarget.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale(1.05) translateY(-5px)`;
+            };
+
+            const handleMouseLeave = (e) => {
+                e.currentTarget.style.transform = `perspective(1000px) rotateX(0deg) rotateY(0deg) scale(1) translateY(0)`;
+            };
+
+            return (
+                <div onClick={() => isSelectionMode ? onToggleSelect(photo.id) : onSelect(photo)}
+                    className={`vault-glow-wrap aspect-[3/4] cursor-pointer group ${isSelected ? 'ring-4 ring-blue-500 shadow-[0_0_30px_rgba(59,130,246,0.8)] scale-95' : ''}`}
+                    style={{'--vault-color': config.vaultColor, transition: 'box-shadow 0.3s ease, filter 0.3s ease, transform 0.1s ease-out'}}
+                    onMouseEnter={playHoverSound}
+                    onMouseMove={isSelectionMode ? undefined : handleMouseMove}
+                    onMouseLeave={isSelectionMode ? undefined : handleMouseLeave}
+                >
+                    <div className="vault-img-container pointer-events-none">
+                        {isVideo ? <video src={photo.url} className="w-full h-full object-cover" /> : <img src={photo.url} className="w-full h-full object-cover" loading="lazy" decoding="async" />}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20 opacity-60 group-hover:opacity-100 transition-opacity"></div>
+                        
+                        <div className="absolute bottom-4 left-4 right-4 text-white opacity-0 group-hover:opacity-100 transition-opacity duration-300 translate-y-4 group-hover:translate-y-0">
+                            <div className="flex items-center gap-2 mb-1 text-[var(--vault-color)] font-bold text-lg drop-shadow-[0_0_8px_var(--vault-color)]">
+                                <Icons.Diamond /> {config.vaultName}
+                            </div>
+                            <div className="text-xs opacity-80 font-mono">{new Date(photo.timestamp).toLocaleDateString()}</div>
+                        </div>
+
+                        {(isSelectionMode || isSelected) && <div className="absolute top-4 left-4 z-20 cursor-pointer drop-shadow-md text-white mix-blend-difference pointer-events-auto" onClick={(e) => { e.stopPropagation(); onToggleSelect(photo.id); }}>{isSelected ? <Icons.CheckCircle /> : <Icons.Circle />}</div>}
+                        {isVideo && <div className="absolute top-4 right-4 p-1 bg-black/60 rounded text-white text-xs backdrop-blur-md"><Icons.Video /></div>}
+                    </div>
+                </div>
+            );
+        }, (prevProps, nextProps) => {
+            return prevProps.isSelected === nextProps.isSelected && 
+                   prevProps.isSelectionMode === nextProps.isSelectionMode && 
+                   prevProps.photo.analysis === nextProps.photo.analysis &&
+                   prevProps.photo.id === nextProps.photo.id;
+        });
+
+        // ==========================================
+        // 核心解耦：探索 3D 墙的独立视差卡片组件
+        // ==========================================
+        const Wall3DItem = React.memo(({ photo, config, onSelect, isBlowing }) => {
+            const meta = parseMetadata(photo.analysis);
+            const isVideo = meta.mimeType?.startsWith('video/');
+            const innerRef = useRef(null);
+
+            // 当处于洗牌“吹起”阶段时，添加巨大的随机向上位移和旋转
+            const currentX = isBlowing ? photo.wallX + photo.blowX : photo.wallX;
+            const currentY = isBlowing ? photo.wallY + photo.blowY : photo.wallY;
+            const currentZ = isBlowing ? photo.wallZ + photo.blowZ : photo.wallZ;
+            const currentRot = isBlowing ? photo.wallRotZ + photo.blowRot : photo.wallRotZ;
+            
+            // 洗牌风暴抛物线：被风吹起时极速，落下时带有沉重的回弹
+            const transitionStyle = isBlowing 
+                ? 'transform 0.8s cubic-bezier(0.1, 0.8, 0.3, 1)' 
+                : 'transform 1.2s cubic-bezier(0.34, 1.56, 0.64, 1)';
+            
+            const baseTransform = `translate3d(calc(-50% + ${currentX}px), calc(-50% + ${currentY}px), ${currentZ}px) rotateZ(${currentRot}deg)`;
+
+            const handleMouseMove = (e) => {
+                if(!innerRef.current || isBlowing) return; // 洗牌空中时不响应悬浮
+                const rect = innerRef.current.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+                const rotateX = ((centerY - y) / centerY) * 20; 
+                const rotateY = ((x - centerX) / centerX) * 20;
+                
+                // 悬停抵消基础偏角，拉近视差
+                innerRef.current.style.transform = `translateZ(300px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) rotateZ(${-photo.wallRotZ}deg) scale(1.15)`;
+                innerRef.current.parentElement.style.zIndex = 50;
+            };
+
+            const handleMouseLeave = () => {
+                if(!innerRef.current || isBlowing) return;
+                innerRef.current.style.transform = `translateZ(0px) rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(1)`;
+                innerRef.current.parentElement.style.zIndex = 1;
+            };
+
+            return (
+                <div 
+                    className="absolute origin-center will-change-transform transform-style-3d"
+                    style={{ 
+                        width: photo.wallW, height: photo.wallH, 
+                        transform: baseTransform, 
+                        transition: transitionStyle,
+                        pointerEvents: isBlowing ? 'none' : 'auto',
+                        zIndex: isBlowing ? 100 : 1
+                    }}
+                >
+                   <div 
+                       ref={innerRef}
+                       className="w-full h-full cursor-pointer transition-transform duration-300 ease-out transform-style-3d group"
+                       onMouseMove={handleMouseMove}
+                       onMouseLeave={handleMouseLeave}
+                       onClick={() => onSelect(photo)}
+                   >
+                        <div className={`w-full h-full rounded-2xl overflow-hidden shadow-[0_30px_60px_rgba(0,0,0,0.8)] border-[8px] md:border-[12px] transition-colors duration-300 relative ${config.theme === 'dark' ? 'bg-slate-900 border-slate-200/90 group-hover:border-white' : 'bg-white border-white group-hover:border-blue-300'}`}>
+                            {isVideo ? <video src={photo.url} className="w-full h-full object-cover" /> : <img src={photo.url} className="w-full h-full object-cover" loading="lazy" decoding="async" />}
+                            <div className="absolute inset-0 bg-gradient-to-tr from-white/5 to-white/30 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
+                        </div>
+                   </div>
+                </div>
+            );
+        }, (prev, next) => prev.photo.id === next.photo.id && prev.isBlowing === next.isBlowing);
+
+        // ==========================================
+        // 视图渲染组件
+        // ==========================================
+        function VaultView({ photos, onSelect, isSelectionMode, selectedIds, setSelectedIds, config }) {
+            if (photos.length === 0) return <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 font-medium">收藏室为空，请在照片详情中点击 💎 移入。</div>;
+            
+            const toggleSelect = useCallback((id) => {
+                setSelectedIds(prev => prev.includes(id) ? prev.filter(v => v !== id) : [...prev, id]);
+            }, [setSelectedIds]);
+
+            return (
+                <div className="w-full h-full overflow-y-auto px-6 py-10 hide-scroll">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-8 md:gap-12">
+                        {photos.map(photo => (
+                            <VaultGridItem key={photo.id} photo={photo} isSelected={selectedIds.includes(photo.id)} isSelectionMode={isSelectionMode} onToggleSelect={toggleSelect} onSelect={onSelect} config={config} />
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        function GridView({ photos, onSelect, themeClasses, isSelectionMode, selectedIds, setSelectedIds, currentRoute, config }) {
+            if (photos.length === 0) return <div className={`w-full h-full flex flex-col items-center justify-center ${themeClasses.textMuted} font-medium`}>{currentRoute === 'trash' ? "回收站为空" : "暂无内容"}</div>;
+            
+            const toggleSelect = useCallback((id) => {
+                setSelectedIds(prev => prev.includes(id) ? prev.filter(v => v !== id) : [...prev, id]);
+            }, [setSelectedIds]);
+            
+            const groupedPhotos = useMemo(() => {
+                const groups = {};
+                photos.forEach(photo => {
+                    const ts = parseMetadata(photo.analysis).exif?.dateTimeOriginal || photo.timestamp;
+                    const dateObj = new Date(ts);
+                    const dateKey = `${dateObj.getFullYear()}年 ${dateObj.getMonth() + 1}月${dateObj.getDate()}日`;
+                    if (!groups[dateKey]) groups[dateKey] = []; groups[dateKey].push(photo);
+                });
+                return groups;
+            }, [photos]);
+
+            return (
+                <div className="w-full h-full overflow-y-auto px-4 pb-28 md:px-8 hide-scroll">
+                    {Object.keys(groupedPhotos).map(dateKey => (
+                        <div key={dateKey} className="mb-8">
+                            <h3 className={`sticky top-0 py-3 z-10 text-md font-bold tracking-wide backdrop-blur-md ${themeClasses.text} ${config.theme === 'dark' ? 'bg-gradient-to-b from-black/5 to-transparent' : 'bg-gradient-to-b from-white/70 to-transparent'} flex items-center gap-3`}>{dateKey}</h3>
+                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-[2px] md:gap-1.5">
+                                {groupedPhotos[dateKey].map(photo => (
+                                    <PhotoGridItem key={photo.id} photo={photo} isSelected={selectedIds.includes(photo.id)} isSelectionMode={isSelectionMode} onToggleSelect={toggleSelect} onSelect={onSelect} config={config} />
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
+        function MapView({ photos, onSelect, config }) {
+            const mapRef = useRef(null);
+            const mapInstance = useRef(null);
+
+            useEffect(() => {
+                if (!mapRef.current) return;
+                if (!mapInstance.current) {
+                    mapInstance.current = L.map(mapRef.current, { zoomControl: false }).setView([35.86166, 104.195397], 4);
+                    L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+                        subdomains: ["1", "2", "3", "4"], attribution: '© 高德地图'
+                    }).addTo(mapInstance.current);
+                    L.control.zoom({ position: 'bottomleft' }).addTo(mapInstance.current);
+                }
+
+                mapInstance.current.eachLayer((layer) => {
+                    if (layer instanceof L.Marker) mapInstance.current.removeLayer(layer);
+                });
+
+                photos.forEach(photo => {
+                    const meta = parseMetadata(photo.analysis);
+                    const lat = meta.manualLat || meta.exif?.latitude;
+                    const lng = meta.manualLng || meta.exif?.longitude;
+                    if (lat && lng) {
+                        const iconHtml = `<div class="w-12 h-12 rounded-xl border-4 ${config.theme === 'dark' ? 'border-slate-800' : 'border-white'} shadow-xl overflow-hidden bg-slate-200 cursor-pointer transform hover:scale-125 transition-transform hover:z-50 origin-bottom"><img src="${photo.url}" class="w-full h-full object-cover" /></div>`;
+                        const icon = L.divIcon({ className: 'custom-map-marker', html: iconHtml, iconSize: [48, 48], iconAnchor: [24, 48] });
+                        const marker = L.marker([lat, lng], { icon }).addTo(mapInstance.current);
+                        marker.on('click', () => onSelect(photo));
+                    }
+                });
+            }, [photos, config.theme, onSelect]);
+
+            return <div className="w-full h-full relative z-0"><div ref={mapRef} className="w-full h-full"></div></div>;
+        }
+
+        // ==========================================
+        // 核心引擎：重构探索 3D 墙 (紧密排列 & 洗牌风暴)
+        // ==========================================
+        function Wall3DView({ photos, onSelect, config }) {
+            const [rotation, setRotation] = useState({ x: 0, y: 0 });
+            const [shuffleCount, setShuffleCount] = useState(0);
+            const [isBlowing, setIsBlowing] = useState(false);
+            
+            // 震撼洗牌触发器
+            const handleShuffle = () => {
+                if (isBlowing || photos.length === 0) return;
+                setIsBlowing(true); // 狂风刮起，照片腾空
+                setTimeout(() => {
+                    setShuffleCount(c => c + 1); // 空中打乱 Seed，更换排列顺序
+                    setIsBlowing(false); // 风停，照片砸向新位置
+                }, 800); 
+            };
+
+            const wallItems = useMemo(() => {
+                // 先为每一张照片生成一个扰动乱数，用于实现真实的“视觉位置互换（洗牌）”
+                const seededPhotos = photos.map(photo => {
+                    let seed = shuffleCount * 10000;
+                    // 使用极度强壮的 DJB2 哈希算法替代简单的字符相加，彻底避免哈希碰撞产生的“连串长龙”现象
+                    for (let i = 0; i < photo.id.length; i++) {
+                        seed = ((seed << 5) - seed) + photo.id.charCodeAt(i);
+                        seed = seed & seed; // 转换为 32位 整数
+                    }
+                    seed = Math.abs(seed) + 1; // 确保为正数
+                    
+                    const random = (offset) => {
+                        let x = Math.sin(seed + offset) * 10000;
+                        return x - Math.floor(x);
+                    };
+                    return { photo, random, sortKey: random(99) };
+                });
+
+                // 通过固定的 sortKey 进行洗牌打乱
+                seededPhotos.sort((a, b) => a.sortKey - b.sortKey);
+
+                return seededPhotos.map((item, visualIndex) => {
+                    const { photo, random } = item;
+                    // 额外混入 visualIndex 作为底层扰动，确保即便哈希极小概率碰撞，渲染角度和坐标也绝对 100% 错开多样
+                    const secureRandom = (offset) => random(offset + visualIndex * 13);
+
+                    return {
+                        ...photo,
+                        wallX: (secureRandom(1) - 0.5) * 1600,     
+                        wallY: visualIndex * 280 + secureRandom(2) * 200, 
+                        wallZ: (secureRandom(3) - 0.5) * 1000,      
+                        wallRotZ: (secureRandom(4) - 0.5) * 40,     
+                        wallW: 280 + secureRandom(5) * 120,
+                        wallH: 360 + secureRandom(6) * 120,
+                        
+                        blowX: (secureRandom(7) - 0.5) * 2000,
+                        blowY: -2000 - secureRandom(8) * 1500, // 向上吹飞 2000~3500px
+                        blowZ: 500 + secureRandom(9) * 800,    // 向镜头拉近
+                        blowRot: 360 + secureRandom(10) * 720  // 疯狂旋转 1~3 圈
+                    };
+                });
+            }, [photos, shuffleCount]);
+
+            const initialMinY = wallItems.length > 0 ? Math.min(...wallItems.map(p => p.wallY)) : 0;
+            const [cameraY, setCameraY] = useState(initialMinY - 400);
+
+            const handlePointerMove = useCallback((e) => {
+                const xRatio = ((e.touches ? e.touches[0].clientX : e.clientX) / window.innerWidth - 0.5) * 2;
+                const yRatio = ((e.touches ? e.touches[0].clientY : e.clientY) / window.innerHeight - 0.5) * 2;
+                setRotation({ x: -yRatio * 20, y: xRatio * 30 }); 
+            }, []);
+
+            const handleWheel = useCallback((e) => {
+                setCameraY(prev => {
+                    let newY = prev + e.deltaY * 2.0;
+                    if (wallItems.length === 0) return 0;
+                    const minY = Math.min(...wallItems.map(p => p.wallY));
+                    const maxY = Math.max(...wallItems.map(p => p.wallY));
+                    const minBoundary = minY - 800;
+                    const maxBoundary = maxY + 800; 
+                    if (newY < minBoundary) newY = minBoundary;
+                    if (newY > maxBoundary) newY = maxBoundary;
+                    return newY;
+                });
+            }, [wallItems]);
+
+            useEffect(() => { 
+                window.addEventListener('mousemove', handlePointerMove); 
+                window.addEventListener('wheel', handleWheel, { passive: true }); 
+                return () => { window.removeEventListener('mousemove', handlePointerMove); window.removeEventListener('wheel', handleWheel); }; 
+            }, [handlePointerMove, handleWheel]);
+
+            const visiblePhotos = wallItems.filter(p => Math.abs(p.wallY - cameraY) < 3500); 
+            
+            if(wallItems.length === 0) return <div className="absolute inset-0 flex items-center justify-center font-bold text-lg opacity-50">此视图暂无内容。</div>;
+
+            return (
+                <div className="absolute inset-0 w-full h-full perspective-[1500px] flex items-center justify-center overflow-hidden">
+                    <div className="relative transform-style-3d transition-transform duration-200 ease-out will-change-transform" style={{ transform: `rotateX(${rotation.x}deg) rotateY(${rotation.y}deg) translateY(${-cameraY}px)` }}>
+                      {visiblePhotos.map((photo) => (
+                          <Wall3DItem key={`3d-${photo.id}`} photo={photo} config={config} onSelect={onSelect} isBlowing={isBlowing} />
+                      ))}
+                    </div>
+                    
+                    {/* 震撼洗牌按钮 */}
+                    <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[60]">
+                        <button 
+                            onClick={handleShuffle}
+                            disabled={isBlowing}
+                            className="px-6 py-3 bg-white/10 hover:bg-white/20 backdrop-blur-xl border border-white/20 text-white rounded-full font-bold tracking-widest shadow-[0_0_20px_rgba(255,255,255,0.1)] flex items-center gap-2 transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-95"
+                        >
+                            🌪️ 震撼洗牌
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 模态框组件
+        // ==========================================
+        function PhotoDetailModal({ photo, onClose, themeClasses, onToggleFavorite, onToggleVault, onTrash, onDelete, onToggleAlbum, onUpdateText, onUpdateLocation, onNavigate, config, currentRoute, addToast }) {
+            const [showAlbums, setShowAlbums] = useState(false);
+            const [isFullscreen, setIsFullscreen] = useState(false); 
+            const [isEditingAI, setIsEditingAI] = useState(false);
+            const [editAIText, setEditAIText] = useState("");
+            const [isRegenerating, setIsRegenerating] = useState(false);
+            const [isPickingLocation, setIsPickingLocation] = useState(false);
+            const [tempLocation, setTempLocation] = useState(null);
+            const mapRef = useRef(null);
+            const mapInstance = useRef(null);
+
+            const data = parseMetadata(photo.analysis);
+            const isVideo = data.mimeType?.startsWith('video/');
+            const isAnalyzing = photo.analyzing || isRegenerating;
+            const currentLat = data.manualLat || data.exif?.latitude;
+            const currentLng = data.manualLng || data.exif?.longitude;
+
+            useEffect(() => {
+                if (currentRoute === 'vault' && config.vaultOpenSound) {
+                    try {
+                        const audio = new window.Audio(config.vaultOpenSound);
+                        audio.volume = 0.7;
+                        audio.play().catch(()=>{});
+                    } catch(e) {}
+                }
+            }, [photo.id, currentRoute, config.vaultOpenSound]);
+
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    if (isEditingAI || isPickingLocation) return;
+                    if (e.key === 'ArrowLeft') onNavigate(-1);
+                    if (e.key === 'ArrowRight') onNavigate(1);
+                    if (e.key === 'Escape') onClose();
+                };
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [onNavigate, onClose, isEditingAI, isPickingLocation]);
+
+            const handleBackdropClick = (e) => { if (e.target === e.currentTarget && !isPickingLocation) onClose(); };
+            const handleSaveText = () => { onUpdateText(editAIText); setIsEditingAI(false); addToast('档案特征修改成功'); };
+
+            useEffect(() => {
+                if (isPickingLocation && mapRef.current) {
+                    if (!mapInstance.current) {
+                        const initLat = currentLat || 35.86166;
+                        const initLng = currentLng || 104.195397;
+                        mapInstance.current = L.map(mapRef.current).setView([initLat, initLng], currentLat ? 12 : 4);
+                        L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+                            subdomains: ["1", "2", "3", "4"], attribution: '© 高德地图'
+                        }).addTo(mapInstance.current);
+                        mapInstance.current.on('move', () => {
+                            const center = mapInstance.current.getCenter();
+                            setTempLocation({ lat: center.lat, lng: center.lng });
+                        });
+                        setTempLocation({ lat: initLat, lng: initLng });
+                    }
+                }
+                return () => { if (mapInstance.current && !isPickingLocation) { mapInstance.current.remove(); mapInstance.current = null; } };
+            }, [isPickingLocation]);
+
+            const handleSaveLocation = () => {
+                if (tempLocation) { onUpdateLocation(tempLocation); addToast('坐标保存成功'); }
+                setIsPickingLocation(false);
+            };
+
+            const handleRegenerate = async () => {
+                if(!config.apiKey) return alert("请先在设置中配置 API Key");
+                setIsRegenerating(true);
+                try {
+                    let safeUrl = photo.url;
+                    try { const urlObj = new URL(photo.url); urlObj.hostname = window.location.hostname; safeUrl = urlObj.href; } catch(e) {}
+                    const resImg = await fetch(safeUrl);
+                    if (!resImg.ok) throw new Error("无法读取服务器原图数据");
+                    const blob = await resImg.blob();
+                    const objectUrl = URL.createObjectURL(blob);
+                    const aiBase64Data = await new Promise((resolve, reject) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const canvas = document.createElement('canvas');
+                            let w = img.width, h = img.height; const maxDim = 1024;
+                            if (w > maxDim || h > maxDim) { if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; } else { w = Math.round(w * maxDim / h); h = maxDim; } }
+                            canvas.width = w; canvas.height = h;
+                            const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0, w, h);
+                            resolve(canvas.toDataURL('image/jpeg', 0.8).split(',')[1]);
+                        };
+                        img.onerror = () => reject(new Error("图片解码失败")); img.src = objectUrl;
+                    });
+                    URL.revokeObjectURL(objectUrl);
+                    const payload = { model: config.apiModel, messages: [{ role: "user", content: [{ type: "text", text: getProfessionalPrompt() }, { type: "image_url", image_url: { url: `data:image/jpeg;base64,${aiBase64Data}` } }] }] };
+                    const baseUrl = config.apiBaseUrl.replace(/\/+$/, '');
+                    const res = await fetch(`${baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` }, body: JSON.stringify(payload) });
+                    const result = await res.json();
+                    if (result.choices && result.choices[0]) { onUpdateText(result.choices[0].message.content); addToast("最新 AI 视觉档案已生成"); } 
+                    else { alert("AI 返回异常: " + (result.error?.message || "未知错误")); }
+                } catch (e) { alert("生成失败: " + e.message); }
+                setIsRegenerating(false);
+            };
+
+            const vaultImageStyle = currentRoute === 'vault' ? { boxShadow: `0 0 60px -10px ${config.vaultColor}`, border: `2px solid ${config.vaultColor}` } : {};
+
+            return (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center animate-in fade-in duration-200" onClick={handleBackdropClick}>
+                    <div className="absolute inset-0 bg-black/95 backdrop-blur-3xl" onClick={handleBackdropClick}></div>
+                    
+                    {currentRoute === 'vault' && (
+                        <div key={photo.id} className="vault-open-flash" style={{'--vault-color': config.vaultColor}}></div>
+                    )}
+                    
+                    <div className={`absolute top-0 w-full p-4 flex justify-between items-center z-[60] bg-gradient-to-b from-black/60 to-transparent transition-opacity duration-300 ${isFullscreen ? 'opacity-0 hover:opacity-100' : 'opacity-100'}`}>
+                        <button className="p-2 hover:bg-white/20 text-white rounded-full transition-all" onClick={onClose}><Icons.Close /></button>
+                        <div className="flex items-center gap-2">
+                            <button onClick={() => setIsFullscreen(!isFullscreen)} className="p-2 hover:bg-white/20 text-white rounded-full transition-all" title="全屏看图">{isFullscreen ? <Icons.Minimize /> : <Icons.Maximize />}</button>
+                            {!isFullscreen && currentRoute !== 'trash' && (
+                                <>
+                                    <button onClick={onToggleVault} className={`p-2 rounded-full transition-all flex items-center gap-1 ${data.inVault ? 'text-[var(--vault-color)] hover:bg-white/10 drop-shadow-[0_0_8px_var(--vault-color)]' : 'text-white hover:bg-white/20'}`} style={{'--vault-color': config.vaultColor}} title={data.inVault ? `移出${config.vaultName}` : `移入${config.vaultName}`}>
+                                        <Icons.Diamond />
+                                    </button>
+                                    <div className="w-px h-5 bg-white/20 mx-1"></div>
+
+                                    <div className="relative">
+                                        <button onClick={() => setShowAlbums(!showAlbums)} className="p-2 hover:bg-white/20 text-white rounded-full transition-all"><Icons.FolderPlus /></button>
+                                        {showAlbums && (
+                                            <div className="absolute right-0 top-12 w-48 bg-slate-800 border border-white/20 rounded-xl shadow-2xl py-2 z-50">
+                                                <div className="px-3 pb-2 mb-2 border-b border-white/10 text-xs text-white/50 font-bold uppercase">选择文件夹</div>
+                                                {config.albums.map(album => (
+                                                    <button key={album.id} onClick={() => { onToggleAlbum(album.id); setShowAlbums(false); }} className="w-full text-left px-4 py-2 text-sm text-white hover:bg-blue-600 flex items-center justify-between">
+                                                        <span className="truncate">{album.name}</span>{data.albums.includes(album.id) && <span className="text-blue-400 font-bold text-lg leading-none">✓</span>}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <button onClick={onToggleFavorite} className="p-2 hover:bg-white/20 text-white rounded-full transition-all">{data.isFavorite ? <Icons.HeartSolid /> : <Icons.Heart />}</button>
+                                    <button onClick={onTrash} className="p-2 hover:bg-red-500/80 text-white rounded-full transition-all" title="移入回收站"><Icons.Trash /></button>
+                                </>
+                            )}
+                            {currentRoute === 'trash' && <button onClick={onDelete} className="p-2 hover:bg-red-500/80 text-white rounded-full font-bold flex items-center gap-1 text-sm">彻底删除</button>}
+                        </div>
+                    </div>
+
+                    {!isPickingLocation && <button onClick={(e) => { e.stopPropagation(); onNavigate(-1); }} className={`absolute left-4 top-1/2 -translate-y-1/2 p-2 bg-black/30 hover:bg-black/60 text-white rounded-full backdrop-blur-md z-20 transition-all ${isFullscreen ? 'opacity-0 hover:opacity-100' : ''}`}><Icons.ChevronLeft /></button>}
+                    {!isPickingLocation && <button onClick={(e) => { e.stopPropagation(); onNavigate(1); }} className={`absolute ${isFullscreen?'right-4':'right-4 md:right-[390px]'} top-1/2 -translate-y-1/2 p-2 bg-black/30 hover:bg-black/60 text-white rounded-full backdrop-blur-md z-20 transition-all ${isFullscreen ? 'opacity-0 hover:opacity-100' : ''}`}><Icons.ChevronRight /></button>}
+
+                    <div className="relative w-full h-full flex flex-col md:flex-row pointer-events-none">
+                        <div className={`transition-all duration-500 relative flex items-center justify-center pointer-events-auto flex-1 h-full p-4 md:p-12 ${isFullscreen ? 'md:p-0' : ''}`} onClick={handleBackdropClick}>
+                            {isPickingLocation ? (
+                                <div className="w-full h-full relative rounded-2xl overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/20 animate-in zoom-in-95">
+                                    <div ref={mapRef} className="w-full h-full bg-slate-800"></div>
+                                    <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-[1000]"><Icons.MapPin className="text-red-500 w-12 h-12 -mt-12 drop-shadow-lg" /></div>
+                                    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[1000] flex gap-4">
+                                        <button onClick={() => setIsPickingLocation(false)} className="px-6 py-3 rounded-full bg-black/60 text-white font-bold backdrop-blur-md border border-white/20 hover:bg-black/80 shadow-lg">取消标记</button>
+                                        <button onClick={handleSaveLocation} className="px-6 py-3 rounded-full bg-blue-600 text-white font-bold backdrop-blur-md border border-blue-500 hover:bg-blue-500 shadow-lg">保存该坐标</button>
+                                    </div>
+                                </div>
+                            ) : (
+                                isVideo ? <video src={photo.url} controls autoPlay loop className="max-w-full max-h-full rounded-lg shadow-2xl relative z-10" style={vaultImageStyle} onClick={handleBackdropClick} /> 
+                                        : <img src={photo.url} className={`max-w-full max-h-full drop-shadow-2xl transition-all relative z-10 ${isFullscreen ? 'object-contain w-screen h-screen' : 'object-contain rounded-lg'}`} style={vaultImageStyle} />
+                            )}
+                        </div>
+
+                        {!isFullscreen && (
+                            <div className="w-full md:w-[380px] h-full flex flex-col pointer-events-auto shrink-0 overflow-y-auto p-4 md:p-6 md:pt-20 bg-gradient-to-l from-black/60 to-transparent hide-scroll pb-10 z-20">
+                                <div className={`${config.theme === 'dark' ? 'bg-slate-900/90 border-white/10 text-slate-100' : 'bg-white/95 border-black/10 text-slate-800 shadow-xl'} border rounded-2xl p-6 flex flex-col gap-6 backdrop-blur-xl`}>
+                                    <div>
+                                        <div className={`flex items-center justify-between mb-3 ${config.theme === 'dark' ? 'text-blue-400' : 'text-blue-600'}`}>
+                                            <div className="flex items-center gap-2"><Icons.Sparkles /> <h3 className="text-sm font-bold tracking-widest uppercase">图像档案特征</h3></div>
+                                            <div className="flex gap-2">
+                                                {!isVideo && <button onClick={handleRegenerate} className="p-1 hover:opacity-70 transition-colors" title="使用大模型重新生成严谨解析"><Icons.Refresh /></button>}
+                                                <button onClick={() => { setEditAIText(data.text); setIsEditingAI(!isEditingAI); }} className="p-1 hover:opacity-70 transition-colors" title="手动编辑"><Icons.Edit /></button>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className={`text-sm font-light ${config.theme === 'dark' ? 'text-slate-300' : 'text-slate-700'}`}>
+                                            {isAnalyzing ? <p className="animate-pulse text-blue-500 font-bold">AI 引擎正在深度解析图像特征中，请稍候...</p> : 
+                                                isEditingAI ? (
+                                                    <div className="flex flex-col gap-2">
+                                                        <textarea value={editAIText} onChange={e => setEditAIText(e.target.value)} className={`w-full h-40 p-3 rounded-lg border outline-none text-sm resize-none ${config.theme === 'dark' ? 'bg-slate-800 text-white border-white/20' : 'bg-slate-50 text-black border-black/20'}`}></textarea>
+                                                        <div className="flex justify-end gap-2"><button onClick={()=>setIsEditingAI(false)} className={`px-4 py-1.5 rounded-lg text-xs font-bold ${config.theme === 'dark' ? 'bg-white/10' : 'bg-black/5'}`}>取消</button><button onClick={handleSaveText} className="px-4 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold shadow-sm">完成保存</button></div>
+                                                    </div>
+                                                ) : (
+                                                    <div className="markdown-body text-sm" dangerouslySetInnerHTML={{ __html: window.marked ? window.marked.parse(data.text) : data.text }}></div>
+                                                )
+                                            }
+                                        </div>
+                                    </div>
+
+                                    <div className={`pt-4 border-t ${config.theme === 'dark' ? 'border-white/10' : 'border-black/10'}`}>
+                                        <div className={`flex items-center justify-between mb-4 ${config.theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+                                            <h3 className="text-xs font-bold tracking-widest uppercase">地理足迹</h3>
+                                            <button onClick={() => setIsPickingLocation(true)} className="hover:text-blue-500 transition-colors" title="编辑位置"><Icons.Map /></button>
+                                        </div>
+                                        <div className={`p-3 rounded-lg border flex items-center justify-between text-xs font-bold ${config.theme === 'dark' ? 'bg-black/40 border-white/5 text-white' : 'bg-slate-100 border-black/5 text-slate-800'}`}>
+                                            {currentLat ? (<><span>📍 已定位</span> <span className="font-mono opacity-60">[{currentLat.toFixed(4)}, {currentLng.toFixed(4)}]</span></>) : (<span className="opacity-50">无位置信息</span>)}
+                                        </div>
+                                    </div>
+
+                                    {data.exif && Object.keys(data.exif).length > 0 && (
+                                        <div className={`pt-4 border-t ${config.theme === 'dark' ? 'border-white/10' : 'border-black/10'}`}>
+                                            <h3 className={`text-xs font-bold tracking-widest uppercase mb-4 ${config.theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>相机参数</h3>
+                                            <div className="flex flex-col gap-3">
+                                                {(data.exif.make || data.exif.model) && <div className="text-sm font-bold">{data.exif.make} {data.exif.model}</div>}
+                                                <div className={`flex flex-wrap gap-2 text-xs font-mono p-3 rounded-lg border ${config.theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-100 border-black/5'}`}>
+                                                    {data.exif.focalLength && <div>{data.exif.focalLength}mm</div>}
+                                                    {data.exif.fNumber && <div>f/{data.exif.fNumber}</div>}
+                                                    {data.exif.exposureTime && <div>{data.exif.exposureTime >= 1 ? data.exif.exposureTime : `1/${Math.round(1/data.exif.exposureTime)}`}s</div>}
+                                                    {data.exif.iso && <div>ISO{data.exif.iso}</div>}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className={`pt-4 border-t flex flex-col gap-3 text-xs font-mono ${config.theme === 'dark' ? 'border-white/10 text-slate-400' : 'border-black/10 text-slate-500'}`}>
+                                        <div className="flex justify-between"><span>文件格式</span><span className={config.theme === 'dark' ? 'text-white' : 'text-black'}>{data.mimeType}</span></div>
+                                        <div className="flex justify-between"><span>拍摄时间</span><span className={config.theme === 'dark' ? 'text-white' : 'text-black'}>{data.exif?.dateTimeOriginal ? new Date(data.exif.dateTimeOriginal).toLocaleString() : '---'}</span></div>
+                                        <div className="flex justify-between"><span>入库时间</span><span className={config.theme === 'dark' ? 'text-white' : 'text-black'}>{new Date(photo.timestamp).toLocaleString()}</span></div>
+                                        {data.deletedAt && <div className="flex justify-between text-red-500"><span>销毁倒计时</span><span>{30 - Math.floor((Date.now() - data.deletedAt)/(1000*3600*24))} 天</span></div>}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 设置中心
+        // ==========================================
+        function SettingsView({ config, setConfig, themeClasses, allPhotos, addToast }) {
+            const [showBgPicker, setShowBgPicker] = useState(false);
+            const handleChange = (key, value) => setConfig(prev => ({ ...prev, [key]: value }));
+            const inputBase = `w-full px-4 py-3 rounded-xl border bg-transparent outline-none transition-all font-medium ${config.theme === 'dark' ? 'border-white/10 focus:border-blue-500' : 'border-black/20 focus:border-blue-500'}`;
+
+            const handleAudioUpload = (e, configKey) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                addToast("正在处理音频文件...", "info");
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    try {
+                        const testConfig = { ...config, [configKey]: reader.result };
+                        localStorage.setItem('nas_gallery_config', JSON.stringify(testConfig));
+                        handleChange(configKey, reader.result);
+                        addToast("✅ 本地音频载入成功！");
+                    } catch (err) { alert("❌ 载入失败：文件体积过大！浏览器配置存储已满，请使用体积更小（建议 < 3MB）的音频文件。"); }
+                };
+                reader.readAsDataURL(file);
+            };
+
+            const testApiConnection = async () => {
+                if(!config.apiKey) return alert("请先填写 API Key！");
+                addToast("正在测试大模型连接...", "info");
+                try {
+                    const payload = { model: config.apiModel, messages: [{ role: "user", content: "请回复测试成功四个字。" }] };
+                    const baseUrl = config.apiBaseUrl.replace(/\/+$/, '');
+                    const res = await fetch(`${baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` }, body: JSON.stringify(payload) });
+                    const result = await res.json();
+                    if(result.choices && result.choices[0]) addToast(`✅ 连接成功！API 返回: ${result.choices[0].message.content}`);
+                    else alert("❌ 连接异常: " + JSON.stringify(result).substring(0, 50));
+                } catch(e) { alert("❌ 请求失败: " + e.message); }
+            };
+
+            return (
+                <div className="w-full h-full overflow-y-auto p-6 md:p-12 relative hide-scroll">
+                    <div className="max-w-4xl mx-auto space-y-10 pb-20">
+                        <div><h2 className={`text-3xl font-bold mb-2 ${config.theme === 'light' ? 'text-blue-600' : ''}`}>配置控制台</h2></div>
+
+                        <section className="space-y-4">
+                            <h3 className={`text-xl font-bold border-b pb-2 border-current border-opacity-10 ${config.theme === 'light' ? 'text-blue-500' : ''}`}>个性化与美化 (Sakurairo)</h3>
+                            
+                            <div className={`p-4 rounded-xl border ${config.theme === 'dark' ? 'bg-black/20 border-white/10' : 'bg-white/50 border-blue-100 shadow-sm'}`}>
+                                <label className="block text-sm font-bold mb-3 opacity-80">自定义应用 Logo</label>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div>
+                                        <div className="flex gap-4 mb-3">
+                                            <button onClick={() => handleChange('appIconType', 'text')} className={`flex-1 py-2 rounded-lg border text-sm font-bold transition-all ${config.appIconType === 'text' ? 'border-blue-500 bg-blue-500/10 text-blue-500' : themeClasses.border}`}>📝 文字/Emoji</button>
+                                            <button onClick={() => handleChange('appIconType', 'image')} className={`flex-1 py-2 rounded-lg border text-sm font-bold transition-all ${config.appIconType === 'image' ? 'border-blue-500 bg-blue-500/10 text-blue-500' : themeClasses.border}`}>🖼️ 图片链接</button>
+                                        </div>
+                                        {config.appIconType === 'text' ? (<input type="text" maxLength="2" placeholder="如 🌸" value={config.appIconText || ''} onChange={(e) => handleChange('appIconText', e.target.value)} className={inputBase} />) : (<input type="text" placeholder="输入图片直链 URL" value={config.appIconImage || ''} onChange={(e) => handleChange('appIconImage', e.target.value)} className={inputBase} />)}
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs mb-2 opacity-80">Logo 形状</label>
+                                        <div className="flex gap-4">
+                                            <button onClick={() => handleChange('appIconShape', 'rounded-lg')} className={`flex-1 py-2 rounded-lg border text-sm font-bold transition-all ${config.appIconShape === 'rounded-lg' ? 'border-blue-500 bg-blue-500/10 text-blue-500' : themeClasses.border}`}>方角</button>
+                                            <button onClick={() => handleChange('appIconShape', 'rounded-full')} className={`flex-1 py-2 rounded-lg border text-sm font-bold transition-all ${config.appIconShape === 'rounded-full' ? 'border-blue-500 bg-blue-500/10 text-blue-500' : themeClasses.border}`}>正圆</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className={`p-4 rounded-xl border ${config.theme === 'dark' ? 'bg-black/20 border-white/10' : 'bg-white/50 border-blue-100 shadow-sm'}`}>
+                                <h4 className="text-sm font-bold mb-4 opacity-80 flex items-center gap-2 text-amber-500"><Icons.Diamond /> 典藏至尊收藏室定制 (Mythic Vault)</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div><label className="block text-xs mb-1 opacity-80 font-bold">收藏室名称</label><input type="text" placeholder="至尊收藏室" value={config.vaultName} onChange={(e) => handleChange('vaultName', e.target.value)} className={inputBase} /></div>
+                                    <div><label className="block text-xs mb-1 opacity-80 font-bold">红装光效颜色 (Hex)</label><input type="text" placeholder="#ef4444" value={config.vaultColor} onChange={(e) => handleChange('vaultColor', e.target.value)} className={inputBase} /></div>
+                                    <div className="md:col-span-2">
+                                        <label className="block text-xs mb-1 opacity-80 font-bold">划过卡牌时的高阶音效 URL (.mp3)</label>
+                                        <div className="flex gap-3">
+                                            <input type="text" placeholder="留空则无声" value={config.vaultSound} onChange={(e) => handleChange('vaultSound', e.target.value)} className={inputBase} />
+                                            <label className={`px-4 py-3 rounded-xl shrink-0 font-bold cursor-pointer flex items-center justify-center transition-all ${config.theme === 'dark' ? 'bg-white/10 hover:bg-white/20' : 'bg-blue-600 text-white hover:bg-blue-500 shadow-md'}`}>📁 本地上传<input type="file" accept="audio/*" className="hidden" onChange={(e) => handleAudioUpload(e, 'vaultSound')} /></label>
+                                        </div>
+                                    </div>
+                                    <div className="md:col-span-2 border-t border-white/10 pt-4 mt-2">
+                                        <label className="block text-xs mb-1 opacity-80 font-bold">展开红装详情时的全屏音效 URL (.mp3)</label>
+                                        <div className="flex gap-3">
+                                            <input type="text" placeholder="留空则无声" value={config.vaultOpenSound} onChange={(e) => handleChange('vaultOpenSound', e.target.value)} className={inputBase} />
+                                            <label className={`px-4 py-3 rounded-xl shrink-0 font-bold cursor-pointer flex items-center justify-center transition-all ${config.theme === 'dark' ? 'bg-white/10 hover:bg-white/20' : 'bg-blue-600 text-white hover:bg-blue-500 shadow-md'}`}>📁 本地上传<input type="file" accept="audio/*" className="hidden" onChange={(e) => handleAudioUpload(e, 'vaultOpenSound')} /></label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className={`p-4 rounded-xl border ${config.theme === 'dark' ? 'bg-black/20 border-white/10' : 'bg-white/50 border-blue-100 shadow-sm'}`}>
+                                    <div className="flex justify-between items-center mb-3">
+                                        <label className="text-sm font-bold flex items-center gap-2"><Icons.Music /> 右下角抽屉音乐播放器</label>
+                                        <input type="checkbox" checked={config.bgmEnabled} onChange={(e) => handleChange('bgmEnabled', e.target.checked)} className="w-5 h-5 accent-blue-600" />
+                                    </div>
+                                    {config.bgmEnabled && (
+                                        <div className="space-y-3 mt-3 animate-in fade-in pt-2 border-t border-black/10 dark:border-white/10">
+                                            <div className="flex gap-2">
+                                                <button onClick={() => handleChange('bgmType', 'netease_song')} className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all ${config.bgmType === 'netease_song' ? 'border-blue-500 bg-blue-500/10 text-blue-500' : themeClasses.border}`}>单曲</button>
+                                                <button onClick={() => handleChange('bgmType', 'netease_playlist')} className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all ${config.bgmType === 'netease_playlist' ? 'border-blue-500 bg-blue-500/10 text-blue-500' : themeClasses.border}`}>歌单</button>
+                                                <button onClick={() => handleChange('bgmType', 'audio')} className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all ${config.bgmType === 'audio' ? 'border-blue-500 bg-blue-500/10 text-blue-500' : themeClasses.border}`}>直链音频</button>
+                                            </div>
+                                            {config.bgmType.includes('netease') ? (
+                                                <div className="space-y-1"><input type="text" placeholder="输入网易云 ID" value={config.bgmId || ''} onChange={(e) => handleChange('bgmId', e.target.value)} className={inputBase} /><p className="text-xs text-slate-400 opacity-80 mt-1">完美适配官方 iframe，支持侧边隐藏。</p></div>
+                                            ) : (
+                                                <div className="space-y-1">
+                                                    <div className="flex gap-3"><input type="text" placeholder="输入 .mp3 绝对地址" value={config.bgmAudioUrl || ''} onChange={(e) => handleChange('bgmAudioUrl', e.target.value)} className={inputBase} /><label className={`px-4 py-3 rounded-xl shrink-0 font-bold cursor-pointer flex items-center justify-center transition-all ${config.theme === 'dark' ? 'bg-white/10 hover:bg-white/20' : 'bg-blue-600 text-white hover:bg-blue-500 shadow-md'}`}>📁 本地上传<input type="file" accept="audio/*" className="hidden" onChange={(e) => handleAudioUpload(e, 'bgmAudioUrl')} /></label></div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className={`p-4 rounded-xl border flex flex-col justify-center ${config.theme === 'dark' ? 'bg-black/20 border-white/10' : 'bg-white/50 border-blue-100 shadow-sm'}`}>
+                                    <div className="flex justify-between items-center mb-3"><label className="text-sm font-bold flex items-center gap-2 text-pink-400"><Icons.Sparkles /> 动态粒子引擎</label><input type="checkbox" checked={config.enableSakura} onChange={(e) => handleChange('enableSakura', e.target.checked)} className="w-5 h-5 accent-pink-500" /></div>
+                                    {config.enableSakura && (
+                                        <div className="space-y-3 animate-in fade-in pt-2 border-t border-black/10 dark:border-white/10">
+                                            <div>
+                                                <label className="block text-xs mb-2 opacity-80 font-bold">粒子外观</label>
+                                                <div className="flex gap-2">
+                                                    <button onClick={() => handleChange('sakuraType', 'realistic')} className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all ${config.sakuraType === 'realistic' ? 'border-pink-500 bg-pink-500/10 text-pink-500' : themeClasses.border}`}>逼真花瓣</button>
+                                                    <button onClick={() => handleChange('sakuraType', 'simple')} className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all ${config.sakuraType === 'simple' ? 'border-pink-500 bg-pink-500/10 text-pink-500' : themeClasses.border}`}>简约花瓣</button>
+                                                    <button onClick={() => handleChange('sakuraType', 'snow')} className={`flex-1 py-1.5 rounded-lg border text-xs font-bold transition-all ${config.sakuraType === 'snow' ? 'border-blue-500 bg-blue-500/10 text-blue-500' : themeClasses.border}`}>唯美雪花</button>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="flex justify-between text-xs font-bold opacity-80 mb-2"><label>飘落速度</label><span>{config.sakuraSpeed}x</span></div>
+                                                <input type="range" min="0.1" max="3" step="0.1" value={config.sakuraSpeed} onChange={(e) => handleChange('sakuraSpeed', parseFloat(e.target.value))} className={`w-full h-1.5 rounded-lg appearance-none ${config.theme === 'dark' ? 'bg-white/20' : 'bg-black/10'}`} />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </section>
+
+                        <section className="space-y-4">
+                            <h3 className={`text-xl font-bold border-b pb-2 border-current border-opacity-10 ${config.theme === 'light' ? 'text-blue-500' : ''}`}>AI 视觉特征提取</h3>
+                            <div className={`flex items-center gap-3 p-4 rounded-xl border ${config.theme === 'dark' ? 'bg-blue-500/10 border-blue-500/20' : 'bg-blue-50 border-blue-200'}`}>
+                                <input type="checkbox" id="autoAI" checked={config.autoGenerateAI} onChange={(e) => handleChange('autoGenerateAI', e.target.checked)} className="w-5 h-5 cursor-pointer accent-blue-600" />
+                                <label htmlFor="autoAI" className="cursor-pointer font-bold text-blue-500">开启上传时自动生成 AI 特征档案</label>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="md:col-span-2"><label className="block text-sm mb-1 opacity-80">Base URL</label><input type="text" value={config.apiBaseUrl} onChange={(e) => handleChange('apiBaseUrl', e.target.value)} className={inputBase} /></div>
+                                <div><label className="block text-sm mb-1 opacity-80">模型 (如 gpt-4o / deepseek-chat)</label><input type="text" value={config.apiModel} onChange={(e) => handleChange('apiModel', e.target.value)} className={inputBase} /></div>
+                                <div><label className="block text-sm mb-1 opacity-80">API Key</label><input type="password" value={config.apiKey} onChange={(e) => handleChange('apiKey', e.target.value)} className={inputBase} /></div>
+                            </div>
+                            <button onClick={testApiConnection} className={`px-4 py-2 border rounded-lg transition-colors text-sm font-bold ${config.theme === 'dark' ? 'bg-slate-800 border-white/20 hover:bg-slate-700 text-white' : 'bg-white border-blue-200 hover:bg-blue-50 text-blue-600 shadow-sm'}`}>🧪 连通性测试</button>
+                        </section>
+
+                        <section className="space-y-4">
+                            <h3 className={`text-xl font-bold border-b pb-2 border-current border-opacity-10 ${config.theme === 'light' ? 'text-blue-500' : ''}`}>安全与隐私</h3>
+                            <div><label className="block text-sm mb-1 opacity-80">隐私空间 PIN 密码 (留空则不设密码)</label><input type="password" value={config.privacyPin || ''} onChange={(e) => handleChange('privacyPin', e.target.value)} className={inputBase} /></div>
+                        </section>
+
+                        <section className="space-y-4">
+                            <h3 className={`text-xl font-bold border-b pb-2 border-current border-opacity-10 ${config.theme === 'light' ? 'text-blue-500' : ''}`}>环境与 UI</h3>
+                            <div>
+                                <label className="block text-sm mb-2 opacity-80 font-bold">色彩主题</label>
+                                <div className="flex gap-4">
+                                    <button onClick={() => handleChange('theme', 'dark')} className={`flex-1 py-3 rounded-xl border transition-all ${config.theme === 'dark' ? 'border-blue-500 bg-blue-500/10 text-blue-500 font-bold' : themeClasses.border}`}>🌙 深空暗黑</button>
+                                    <button onClick={() => handleChange('theme', 'light')} className={`flex-1 py-3 rounded-xl border transition-all ${config.theme === 'light' ? 'border-blue-500 bg-blue-500/10 text-blue-600 font-bold shadow-md' : themeClasses.border}`}>☀️ 清新明亮</button>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm mb-2 opacity-80 font-bold">全局背景壁纸</label>
+                                <div className="flex gap-3">
+                                    <input type="text" value={config.bgImage} onChange={(e) => handleChange('bgImage', e.target.value)} className={inputBase} />
+                                    <button onClick={() => setShowBgPicker(true)} className={`px-4 py-3 rounded-xl shrink-0 font-bold ${config.theme === 'dark' ? 'bg-white/10 hover:bg-white/20' : 'bg-blue-600 text-white hover:bg-blue-500 shadow-md'}`}>图库直选</button>
+                                </div>
+                            </div>
+                            <div className="flex gap-6 pt-4">
+                                <div className="flex-1"><label className="block text-sm mb-2 opacity-80 font-bold">遮罩暗度 ({Math.round(config.bgOpacity*100)}%)</label><input type="range" min="0" max="1" step="0.05" value={config.bgOpacity} onChange={(e) => handleChange('bgOpacity', parseFloat(e.target.value))} className={`w-full h-2 rounded-lg appearance-none ${config.theme === 'dark' ? 'bg-white/20' : 'bg-black/10'}`} /></div>
+                                <div className="flex-1"><label className="block text-sm mb-2 opacity-80 font-bold">毛玻璃模糊 ({config.blurLevel}px)</label><input type="range" min="0" max="100" step="1" value={config.blurLevel} onChange={(e) => handleChange('blurLevel', parseInt(e.target.value))} className={`w-full h-2 rounded-lg appearance-none ${config.theme === 'dark' ? 'bg-white/20' : 'bg-black/10'}`} /></div>
+                            </div>
+                        </section>
+                    </div>
+
+                    {showBgPicker && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-12 animate-in fade-in">
+                            <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setShowBgPicker(false)}></div>
+                            <div className={`relative w-full max-w-5xl h-3/4 flex flex-col rounded-2xl shadow-2xl overflow-hidden ${config.theme === 'dark' ? 'bg-slate-900 border-white/10' : 'bg-white border-black/10'}`}>
+                                <div className="p-4 border-b border-white/10 flex justify-between items-center"><h3 className="font-bold text-lg">挑选背景图片</h3><button onClick={() => setShowBgPicker(false)}><Icons.Close /></button></div>
+                                <div className="p-4 overflow-y-auto grid grid-cols-3 md:grid-cols-5 gap-3">
+                                    {allPhotos.filter(p => !parseMetadata(p.analysis).mimeType?.startsWith('video/')).map(photo => (
+                                        <div key={photo.id} onClick={() => { handleChange('bgImage', photo.url); setShowBgPicker(false); }} className="aspect-square bg-slate-800 rounded-lg overflow-hidden cursor-pointer hover:ring-4 hover:ring-blue-500 shadow-md"><img src={photo.url} className="w-full h-full object-cover" /></div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 主程序入口
+        // ==========================================
+        function App() {
+          const [config, setConfig] = useState(() => { 
+              const saved = localStorage.getItem('nas_gallery_config'); 
+              const parsed = saved ? { ...DEFAULT_CONFIG, ...JSON.parse(saved) } : DEFAULT_CONFIG; 
+              if (parsed.bgmType === 'netease') parsed.bgmType = 'netease_playlist';
+              if (parsed.sakuraSpeed === undefined) parsed.sakuraSpeed = 1.0;
+              if (parsed.sakuraType === undefined) parsed.sakuraType = 'realistic';
+              if (parsed.vaultName === undefined) parsed.vaultName = '至尊收藏室';
+              if (parsed.vaultColor === undefined) parsed.vaultColor = '#ef4444';
+              if (parsed.vaultSound === undefined) parsed.vaultSound = 'https://cdn.pixabay.com/audio/2022/03/15/audio_c8b8f7eb3e.mp3';
+              if (parsed.vaultOpenSound === undefined) parsed.vaultOpenSound = 'https://cdn.pixabay.com/audio/2024/09/09/audio_24da2d10ae.mp3';
+              return parsed;
+          });
+          const [currentRoute, setCurrentRoute] = useState('all'); 
+          const [sidebarOpen, setSidebarOpen] = useState(true);
+          const [allPhotos, setAllPhotos] = useState([]);
+          const [selectedPhoto, setSelectedPhoto] = useState(null);
+          const [isUploading, setIsUploading] = useState(false);
+          const [albumModalOpen, setAlbumModalOpen] = useState(false);
+          const [newAlbumName, setNewAlbumName] = useState("");
+          const [searchQuery, setSearchQuery] = useState("");
+          const [sortBy, setSortBy] = useState("upload_desc"); 
+          const [isSelectionMode, setIsSelectionMode] = useState(false);
+          const [selectedIds, setSelectedIds] = useState([]);
+          const [privacyUnlocked, setPrivacyUnlocked] = useState(false);
+          const [showBatchAlbumMenu, setShowBatchAlbumMenu] = useState(false);
+          
+          const [toasts, setToasts] = useState([]);
+          const addToast = useCallback((msg, type = 'success') => {
+              const id = Date.now() + Math.random();
+              setToasts(prev => [...prev, { id, msg, type }]);
+              setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+          }, []);
+
+          useEffect(() => { localStorage.setItem('nas_gallery_config', JSON.stringify(config)); }, [config]);
+
+          const loadCloudPhotos = async () => { try { setAllPhotos(await dbAPI.getAllPhotos()); } catch (err) { console.error("Error", err); } };
+          useEffect(() => { loadCloudPhotos(); }, []);
+          useEffect(() => { if (searchQuery.trim().length > 0 && currentRoute !== 'all') setCurrentRoute('all'); }, [searchQuery]);
+          
+          useEffect(() => { if (!isSelectionMode) setShowBatchAlbumMenu(false); }, [isSelectionMode]);
+
+          // 数据操作函数
+          const handleTrash = async (idsToTrash) => {
+              const promises = idsToTrash.map(async (id) => {
+                  const photo = allPhotos.find(p => p.id === id);
+                  const meta = parseMetadata(photo.analysis); meta.deletedAt = Date.now();
+                  return dbAPI.updatePhoto(id, { analysis: JSON.stringify(meta), analyzing: photo.analyzing });
+              });
+              await Promise.all(promises); await loadCloudPhotos();
+              setSelectedIds([]); setIsSelectionMode(false); setSelectedPhoto(null);
+              addToast(`已将 ${idsToTrash.length} 张图片移至回收站`);
+          };
+
+          const handleRestore = async (idsToRestore) => {
+              const promises = idsToRestore.map(async (id) => {
+                  const photo = allPhotos.find(p => p.id === id);
+                  const meta = parseMetadata(photo.analysis); meta.deletedAt = null; 
+                  return dbAPI.updatePhoto(id, { analysis: JSON.stringify(meta), analyzing: photo.analyzing });
+              });
+              await Promise.all(promises); await loadCloudPhotos();
+              setSelectedIds([]); setIsSelectionMode(false);
+              addToast(`成功恢复 ${idsToRestore.length} 张图片`);
+          };
+
+          const handlePermanentDelete = async (idsToDelete) => {
+              if (!confirm(`🚨 危险！彻底擦除硬盘里的这 ${idsToDelete.length} 个文件？`)) return;
+              try {
+                  const promises = idsToDelete.map(id => dbAPI.deletePhoto(id));
+                  await Promise.all(promises);
+                  setAllPhotos(prev => prev.filter(p => !idsToDelete.includes(p.id)));
+                  setSelectedIds([]); setIsSelectionMode(false); setSelectedPhoto(null);
+                  addToast(`彻底删除了 ${idsToDelete.length} 个文件`);
+              } catch (e) { alert("删除失败: " + e.message); }
+          };
+
+          const handleTogglePrivacy = async (idsToToggle) => {
+              const promises = idsToToggle.map(async (id) => {
+                  const photo = allPhotos.find(p => p.id === id);
+                  const meta = parseMetadata(photo.analysis); meta.isPrivate = !meta.isPrivate;
+                  return dbAPI.updatePhoto(id, { analysis: JSON.stringify(meta), analyzing: photo.analyzing });
+              });
+              await Promise.all(promises); await loadCloudPhotos();
+              setSelectedIds([]); setIsSelectionMode(false); setSelectedPhoto(null);
+          };
+
+          const handleUpdateMetaField = async (photo, field, value) => {
+              const meta = parseMetadata(photo.analysis);
+              let newAnalyzing = photo.analyzing; 
+              if (field === 'isFavorite') meta.isFavorite = !meta.isFavorite;
+              if (field === 'inVault') { meta.inVault = !meta.inVault; addToast(meta.inVault ? `已收入 ${config.vaultName}` : `已移出 ${config.vaultName}`); }
+              if (field === 'albums') { if (meta.albums.includes(value)) meta.albums = meta.albums.filter(v => v !== value); else meta.albums.push(value); }
+              if (field === 'text') { meta.text = value; newAnalyzing = false; }
+              if (field === 'location') { meta.manualLat = value.lat; meta.manualLng = value.lng; }
+              const newAnalysis = JSON.stringify(meta);
+              setAllPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, analysis: newAnalysis, analyzing: newAnalyzing } : p));
+              setSelectedPhoto(prev => prev && prev.id === photo.id ? { ...photo, analysis: newAnalysis, analyzing: newAnalyzing } : prev);
+              try { await dbAPI.updatePhoto(photo.id, { analysis: newAnalysis, analyzing: newAnalyzing }); } catch (e) {}
+          };
+
+          const handleToggleVaultBatch = async (ids) => {
+              const promises = ids.map(async (id) => {
+                  const photo = allPhotos.find(p => p.id === id);
+                  const meta = parseMetadata(photo.analysis); meta.inVault = !meta.inVault;
+                  return dbAPI.updatePhoto(id, { analysis: JSON.stringify(meta), analyzing: photo.analyzing });
+              });
+              await Promise.all(promises); await loadCloudPhotos();
+              setSelectedIds([]); setIsSelectionMode(false); addToast(`批量收藏室状态已切换`);
+          };
+
+          const handleBatchAddToAlbum = async (albumId) => {
+              setShowBatchAlbumMenu(false);
+              const promises = selectedIds.map(async (id) => {
+                  const photo = allPhotos.find(p => p.id === id);
+                  const meta = parseMetadata(photo.analysis);
+                  if (!meta.albums.includes(albumId)) {
+                      meta.albums.push(albumId);
+                      return dbAPI.updatePhoto(id, { analysis: JSON.stringify(meta), analyzing: photo.analyzing });
+                  }
+                  return Promise.resolve();
+              });
+              await Promise.all(promises); await loadCloudPhotos();
+              setSelectedIds([]); setIsSelectionMode(false); addToast(`成功将 ${selectedIds.length} 项移入文件夹`);
+          };
+
+          const handleFileUpload = async (e) => {
+            const files = e.target.files;
+            if (!files.length) return;
+            setIsUploading(true);
+            
+            // 为了防止密集报错，即使不保留数据库坐标了，依然生成占位符
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const isVideo = file.type.startsWith('video/');
+                let exifData = null;
+                if (!isVideo && !file.type.includes('gif')) { 
+                    try {
+                        const exifRaw = await exifr.parse(file, true);
+                        if (exifRaw) exifData = { make: exifRaw.Make, model: exifRaw.Model, lens: exifRaw.LensModel, fNumber: exifRaw.FNumber, exposureTime: exifRaw.ExposureTime, iso: exifRaw.ISO, dateTimeOriginal: exifRaw.DateTimeOriginal ? new Date(exifRaw.DateTimeOriginal).getTime() : null, latitude: exifRaw.latitude, longitude: exifRaw.longitude };
+                    } catch(e) {}
+                }
+                const reader = new FileReader();
+                reader.onloadend = async () => {
+                  try {
+                    const rawBase64 = reader.result;
+                    const pureBase64Data = rawBase64.split(',')[1];
+                    const newId = Date.now().toString() + Math.floor(Math.random()*1000);
+                    const initialAnalysisData = { 
+                        text: isVideo ? "视频/动图不提供视觉分析" : (config.autoGenerateAI ? "AI 引擎正在深度解析图像档案..." : "未开启自动分析，请放大图片手动生成。"), 
+                        mimeType: file.type, exif: exifData, isFavorite: false, inVault: false, albums: [], deletedAt: null, isPrivate: currentRoute === 'private',
+                        manualLat: null, manualLng: null
+                    };
+                    
+                    // 传入空值即可，现在我们改为纯动态算法渲染墙体坐标了
+                    const newPhotoData = {
+                      id: newId, url: rawBase64, x: 0, y: 0, z: 0, rotZ: 0, width: 0, height: 0,
+                      analysis: JSON.stringify(initialAnalysisData), analyzing: (!isVideo && config.autoGenerateAI), timestamp: Date.now()
+                    };
+                    
+                    const savedPhoto = await dbAPI.addPhoto(newPhotoData);
+                    setAllPhotos(prev => [savedPhoto, ...prev]);
+
+                    if (!isVideo && config.autoGenerateAI && config.apiKey) {
+                       try {
+                         const aiBase64Data = await new Promise((resolve) => {
+                            const img = new Image();
+                            img.onload = () => {
+                                const canvas = document.createElement('canvas');
+                                let w = img.width, h = img.height; const maxDim = 1024; 
+                                if (w > maxDim || h > maxDim) { if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; } else { w = Math.round(w * maxDim / h); h = maxDim; } }
+                                canvas.width = w; canvas.height = h; const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0, w, h);
+                                resolve(canvas.toDataURL('image/jpeg', 0.8).split(',')[1]);
+                            };
+                            img.onerror = () => resolve(pureBase64Data); img.src = rawBase64;
+                         });
+                         const payload = { model: config.apiModel, messages: [{ role: "user", content: [{ type: "text", text: getProfessionalPrompt() }, { type: "image_url", image_url: { url: `data:image/jpeg;base64,${aiBase64Data}` } }] }] };
+                         const baseUrl = config.apiBaseUrl.replace(/\/+$/, '');
+                         const res = await fetch(`${baseUrl}/chat/completions`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${config.apiKey}` }, body: JSON.stringify(payload) });
+                         const data = await res.json();
+                         if (data.choices && data.choices[0]) initialAnalysisData.text = data.choices[0].message.content; else throw new Error("API异常");
+                       } catch (err) { initialAnalysisData.text = "AI 解析中断，请手动生成。"; }
+                       setAllPhotos(prev => prev.map(p => p.id === newId ? { ...p, analysis: JSON.stringify(initialAnalysisData), analyzing: false } : p));
+                       try { await dbAPI.updatePhoto(newId, { analysis: JSON.stringify(initialAnalysisData), analyzing: false }); } catch (e) {}
+                       addToast("AI 视觉分析已生成");
+                    }
+                  } catch (error) {}
+                };
+                reader.readAsDataURL(file);
+            }
+            setIsUploading(false);
+          };
+
+          const handleCreateAlbum = () => {
+              if(!newAlbumName.trim()) return;
+              const newAlbum = { id: 'album_' + Date.now(), name: newAlbumName, viewType: 'grid' };
+              setConfig(prev => ({ ...prev, albums: [...prev.albums, newAlbum] }));
+              setNewAlbumName(""); setAlbumModalOpen(false); setCurrentRoute(newAlbum.id);
+              addToast(`文件夹 "${newAlbumName}" 创建成功`);
+          };
+
+          const currentAlbumConfig = config.albums.find(a => a.id === currentRoute);
+          const currentViewType = currentRoute === 'map' ? 'map' : (currentRoute === 'vault' ? 'vault' : (currentAlbumConfig ? currentAlbumConfig.viewType : (currentRoute === 'settings' ? null : 'grid')));
+
+          const filteredPhotos = useMemo(() => {
+              let list = [...allPhotos];
+              const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+              list = list.filter(p => {
+                  const meta = parseMetadata(p.analysis);
+                  if (meta.deletedAt && (Date.now() - meta.deletedAt > THIRTY_DAYS)) return false;
+                  return true;
+              });
+
+              list.sort((a, b) => {
+                  const ta = parseMetadata(a.analysis).exif?.dateTimeOriginal || a.timestamp;
+                  const tb = parseMetadata(b.analysis).exif?.dateTimeOriginal || b.timestamp;
+                  if (sortBy === 'capture_desc') return tb - ta;
+                  if (sortBy === 'upload_asc') return a.timestamp - b.timestamp;
+                  return b.timestamp - a.timestamp; 
+              });
+
+              if (searchQuery.trim()) {
+                  const queryTerms = searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
+                  return list.filter(p => {
+                      const meta = parseMetadata(p.analysis);
+                      if (meta.deletedAt || meta.isPrivate) return false;
+                      const d = new Date(p.timestamp).toLocaleDateString();
+                      const ed = meta.exif?.dateTimeOriginal ? new Date(meta.exif.dateTimeOriginal).toLocaleDateString() : '';
+                      const albumNames = meta.albums.map(id => config.albums.find(a => a.id === id)?.name || "").join(" ").toLowerCase();
+                      const searchableText = [ meta.text, d, ed, albumNames, meta.exif?.make, meta.exif?.model, meta.exif?.lens ].filter(Boolean).join(" ").toLowerCase();
+                      return queryTerms.every(term => searchableText.includes(term));
+                  });
+              }
+
+              if(currentRoute === 'trash') return list.filter(p => parseMetadata(p.analysis).deletedAt);
+              if(currentRoute === 'private') return list.filter(p => parseMetadata(p.analysis).isPrivate && !parseMetadata(p.analysis).deletedAt);
+
+              const normalList = list.filter(p => !parseMetadata(p.analysis).deletedAt && !parseMetadata(p.analysis).isPrivate);
+              
+              if(currentRoute === 'vault') return normalList.filter(p => parseMetadata(p.analysis).inVault);
+              if(currentRoute === 'all') return normalList;
+              if(currentRoute === 'map') return normalList.filter(p => parseMetadata(p.analysis).manualLat || parseMetadata(p.analysis).exif?.latitude); 
+              if(currentRoute === 'favorites') return normalList.filter(p => parseMetadata(p.analysis).isFavorite);
+              if(currentRoute === 'videos') return normalList.filter(p => parseMetadata(p.analysis).mimeType?.startsWith('video/'));
+              if(currentRoute === 'images') return normalList.filter(p => !parseMetadata(p.analysis).mimeType?.startsWith('video/'));
+              
+              if(currentRoute.startsWith('smart_')) {
+                  const type = currentRoute.replace('smart_', '');
+                  const keywords = SMART_ALBUMS[type].keywords;
+                  return normalList.filter(p => keywords.some(k => parseMetadata(p.analysis).text.toLowerCase().includes(k)));
+              }
+              return normalList.filter(p => parseMetadata(p.analysis).albums.includes(currentRoute));
+          }, [allPhotos, currentRoute, sortBy, searchQuery, config.albums]);
+
+          const handleNavigatePhoto = (direction) => {
+              if(!selectedPhoto || filteredPhotos.length === 0) return;
+              const currentIndex = filteredPhotos.findIndex(p => p.id === selectedPhoto.id);
+              let newIndex = currentIndex + direction;
+              if (newIndex < 0) newIndex = filteredPhotos.length - 1;
+              if (newIndex >= filteredPhotos.length) newIndex = 0;
+              setSelectedPhoto(filteredPhotos[newIndex]);
+          };
+
+          const themeClasses = {
+              text: config.theme === 'dark' ? 'text-slate-100' : 'text-slate-900',
+              textMuted: config.theme === 'dark' ? 'text-slate-400' : 'text-slate-500',
+              bgSidebar: config.theme === 'dark' ? 'bg-slate-900/90 border-white/10' : 'bg-white/90 border-black/10 shadow-xl',
+              bgHover: config.theme === 'dark' ? 'hover:bg-white/10' : 'hover:bg-black/5',
+              bgActive: config.theme === 'dark' ? 'bg-blue-600/20 text-blue-400' : 'bg-blue-100 text-blue-700',
+              border: config.theme === 'dark' ? 'border-white/10' : 'border-black/10',
+              overlay: config.theme === 'dark' ? `rgba(10, 15, 30, ${config.bgOpacity})` : `rgba(255, 255, 255, ${config.bgOpacity})`,
+          };
+
+          if (currentRoute === 'private' && config.privacyPin && !privacyUnlocked) {
+              return (
+                  <div className={`w-full h-screen flex flex-col items-center justify-center ${config.theme === 'dark' ? 'bg-slate-950 text-white' : 'bg-slate-50 text-slate-800'}`}>
+                      <Icons.Lock />
+                      <h2 className="text-xl font-bold mt-4 mb-6">隐私空间已锁定</h2>
+                      <input type="password" placeholder="输入 PIN 码回车" className={`px-4 py-2 rounded-lg outline-none border text-center tracking-widest ${config.theme === 'dark' ? 'bg-slate-800 border-white/20' : 'bg-white border-black/20 shadow-sm'}`} onKeyDown={(e) => { if (e.key === 'Enter') { if(e.target.value === config.privacyPin) setPrivacyUnlocked(true); else { alert('密码错误'); e.target.value = ''; } } }} />
+                      <button onClick={() => setCurrentRoute('all')} className="mt-6 text-sm text-blue-500 font-medium hover:underline">返回主页</button>
+                  </div>
+              )
+          }
+
+          const getRouteTitle = () => {
+              if(searchQuery.trim()) return `搜索结果`;
+              if(currentRoute === 'all') return "时间线图库";
+              if(currentRoute === 'map') return "世界足迹";
+              if(currentRoute === 'vault') return config.vaultName;
+              if(currentRoute === 'trash') return "回收站 (30天过期)";
+              if(currentRoute === 'private') return "隐私空间";
+              if(currentRoute === 'settings') return "控制台";
+              if(currentRoute.startsWith('smart_')) return SMART_ALBUMS[currentRoute.replace('smart_', '')].name;
+              return currentAlbumConfig ? currentAlbumConfig.name : (currentRoute === 'favorites' ? '我的收藏' : '图库');
+          };
+
+          return (
+            <div className={`flex h-screen w-full font-sans transition-colors duration-500 ${themeClasses.text}`}>
+              {currentRoute !== 'vault' && (
+                  <>
+                      <div className="fixed inset-0 -z-20 bg-cover bg-center transition-all duration-700" style={{ backgroundImage: `url(${config.bgImage})` }}></div>
+                      <div className="fixed inset-0 -z-10 transition-all duration-500" style={{ backgroundColor: themeClasses.overlay, backdropFilter: `blur(${config.blurLevel}px)` }}></div>
+                  </>
+              )}
+              {currentRoute === 'vault' && <div className="fixed inset-0 -z-10 bg-slate-950 transition-colors duration-1000"></div>}
+
+              <div className="fixed top-20 right-6 z-[9999] flex flex-col gap-3 pointer-events-none">
+                  {toasts.map(t => (
+                      <div key={t.id} className={`flex items-center gap-3 px-5 py-3 rounded-xl shadow-2xl backdrop-blur-xl animate-in slide-in-from-right-8 pointer-events-auto transition-all ${config.theme === 'dark' ? 'bg-slate-800/90 border border-white/10 text-white' : 'bg-white/90 border border-black/10 text-slate-800'}`}>
+                          <div className={t.type === 'success' ? 'text-green-500' : 'text-blue-500'}><Icons.CheckCircle /></div>
+                          <span className="text-sm font-bold tracking-wide">{t.msg}</span>
+                      </div>
+                  ))}
+              </div>
+
+              {config.enableSakura && <SakuraEffect config={config} />}
+
+              <div className={`shrink-0 transition-all duration-300 ease-in-out ${sidebarOpen ? 'w-64' : 'w-0'} overflow-y-auto border-r ${themeClasses.bgSidebar} backdrop-blur-2xl z-20 hide-scroll`}>
+                  <aside className="w-64 min-h-full flex flex-col pb-10">
+                      <div className={`h-16 flex items-center px-6 font-bold text-lg tracking-wide border-b ${themeClasses.border}`}>
+                          <div className={`w-7 h-7 mr-3 flex items-center justify-center shadow-lg shrink-0 ${config.appIconShape === 'rounded-full' ? 'rounded-full' : 'rounded-lg'} ${config.appIconType === 'text' ? 'bg-blue-600 text-white text-sm' : 'overflow-hidden border border-black/10'}`}>
+                              {config.appIconType === 'text' ? config.appIconText : <img src={config.appIconImage} className="w-full h-full object-cover bg-white" alt="logo" />}
+                          </div> 
+                          Sakura+
+                      </div>
+                      <div className="flex-1 py-4 px-3 space-y-6">
+                          <div>
+                              <div className="space-y-1">
+                                  <button onClick={() => setCurrentRoute('all')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-sm font-medium ${currentRoute === 'all' ? themeClasses.bgActive : themeClasses.bgHover}`}><Icons.Photos /> 图库 (全部)</button>
+                                  <button onClick={() => setCurrentRoute('map')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-sm font-medium ${currentRoute === 'map' ? themeClasses.bgActive : themeClasses.bgHover}`}><Icons.Map /> 世界足迹</button>
+                                  <button onClick={() => setCurrentRoute('favorites')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-sm font-medium ${currentRoute === 'favorites' ? themeClasses.bgActive : themeClasses.bgHover}`}><Icons.Heart /> 我的收藏</button>
+                                  <button onClick={() => setCurrentRoute('videos')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-sm font-medium ${currentRoute === 'videos' ? themeClasses.bgActive : themeClasses.bgHover}`}><Icons.Video /> 视频录像</button>
+                              </div>
+                          </div>
+                          <div>
+                              <div className={`px-3 mb-2 flex items-center gap-1 text-xs font-bold uppercase tracking-widest ${themeClasses.textMuted}`}><Icons.Sparkles /> 智能分类</div>
+                              <div className="space-y-1">
+                                  {Object.keys(SMART_ALBUMS).map(key => (
+                                      <button key={key} onClick={() => setCurrentRoute('smart_'+key)} className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-sm font-medium ${currentRoute === 'smart_'+key ? themeClasses.bgActive : themeClasses.bgHover}`}><span className="text-base leading-none">{SMART_ALBUMS[key].icon}</span> {SMART_ALBUMS[key].name}</button>
+                                  ))}
+                              </div>
+                          </div>
+                          <div>
+                              <div className={`px-3 mb-2 flex items-center justify-between text-xs font-bold uppercase tracking-widest ${themeClasses.textMuted}`}><span>典藏与至尊</span></div>
+                              <div className="space-y-1">
+                                  <button onClick={() => setCurrentRoute('vault')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-sm font-bold ${currentRoute === 'vault' ? 'bg-gradient-to-r from-slate-900 to-black border border-white/10 text-[var(--vault-color)] shadow-[0_0_15px_var(--vault-color)]' : 'hover:bg-slate-900 hover:text-white'}`} style={{'--vault-color': config.vaultColor}}>
+                                      <Icons.Diamond /> {config.vaultName}
+                                  </button>
+                              </div>
+                          </div>
+                          <div>
+                              <div className={`px-3 mb-2 flex items-center justify-between text-xs font-bold uppercase tracking-widest ${themeClasses.textMuted}`}><span>我的文件夹</span><button onClick={() => setAlbumModalOpen(true)} className={`hover:text-blue-500 transition-colors ${config.theme === 'light' ? 'text-slate-400' : ''}`}><Icons.FolderPlus /></button></div>
+                              <div className="space-y-1">
+                                  {config.albums.map(album => (
+                                      <button key={album.id} onClick={() => setCurrentRoute(album.id)} className={`w-full flex items-center justify-between px-3 py-2 rounded-lg transition-all text-sm font-medium ${currentRoute === album.id ? themeClasses.bgActive : themeClasses.bgHover}`}>
+                                          <div className="flex items-center gap-3 truncate"><Icons.Folder /> <span className="truncate">{album.name}</span></div>{album.viewType === '3d' ? <Icons.Wall3D/> : <Icons.GridIcon/>}
+                                      </button>
+                                  ))}
+                              </div>
+                          </div>
+                          <div>
+                              <div className={`px-3 mb-2 text-xs font-bold uppercase tracking-widest ${themeClasses.textMuted}`}>空间与安全</div>
+                              <div className="space-y-1">
+                                  <button onClick={() => { setCurrentRoute('private'); if(!config.privacyPin) setPrivacyUnlocked(true); }} className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-sm font-medium ${currentRoute === 'private' ? themeClasses.bgActive : themeClasses.bgHover}`}><Icons.Lock /> 隐私空间</button>
+                                  <button onClick={() => setCurrentRoute('trash')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-all text-sm font-medium ${currentRoute === 'trash' ? themeClasses.bgActive : themeClasses.bgHover}`}><Icons.Trash /> 最近删除</button>
+                              </div>
+                          </div>
+                      </div>
+                      <div className={`p-3 border-t ${themeClasses.border}`}>
+                          <button onClick={() => setCurrentRoute('settings')} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm font-medium ${currentRoute === 'settings' ? themeClasses.bgActive : themeClasses.bgHover}`}><Icons.Settings /> 系统控制台</button>
+                      </div>
+                  </aside>
+              </div>
+
+              <main className="flex-1 flex flex-col relative h-screen overflow-hidden">
+                  <header className={`h-16 shrink-0 flex items-center justify-between px-4 md:px-6 border-b ${currentRoute==='vault' ? 'border-white/5 bg-slate-950/80 text-white' : themeClasses.border + ' ' + (config.theme === 'dark' ? 'bg-black/20' : 'bg-white/60')} backdrop-blur-md z-10`}>
+                      <div className="flex items-center gap-4 flex-1">
+                          <button onClick={() => setSidebarOpen(!sidebarOpen)} className={`p-2 rounded-lg transition-colors ${currentRoute==='vault' ? 'hover:bg-white/10' : themeClasses.bgHover}`}><Icons.Menu /></button>
+                          <h2 className="text-xl font-bold flex items-center gap-3 whitespace-nowrap hidden sm:flex" style={{color: currentRoute==='vault'?config.vaultColor:undefined, textShadow: currentRoute==='vault'?`0 0 10px ${config.vaultColor}`:'none'}}>
+                              {currentRoute === 'vault' && <Icons.Diamond />} {getRouteTitle()}
+                              {currentAlbumConfig && (
+                                  <div className={`flex items-center rounded-lg p-0.5 ml-2 ${config.theme === 'dark' ? 'bg-black/30' : 'bg-black/5'}`}>
+                                      <button onClick={() => setConfig({...config, albums: config.albums.map(a => a.id===currentRoute?{...a,viewType:'grid'}:a)})} className={`p-1 rounded ${currentViewType==='grid' ? (config.theme==='dark'?'bg-white/20':'bg-white shadow-sm') : 'opacity-50'}`}><Icons.GridIcon/></button>
+                                      <button onClick={() => setConfig({...config, albums: config.albums.map(a => a.id===currentRoute?{...a,viewType:'3d'}:a)})} className={`p-1 rounded ${currentViewType==='3d' ? (config.theme==='dark'?'bg-white/20':'bg-white shadow-sm') : 'opacity-50'}`}><Icons.Wall3D/></button>
+                                  </div>
+                              )}
+                          </h2>
+                          {currentRoute !== 'settings' && currentRoute !== 'vault' && (
+                              <div className="relative ml-4 max-w-sm flex-1">
+                                  <div className={`absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none opacity-50 ${config.theme === 'light' ? 'text-black' : 'text-white'}`}><Icons.Search /></div>
+                                  <input type="text" placeholder="多维搜索..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className={`w-full pl-10 pr-4 py-2 rounded-full outline-none text-sm font-medium border transition-all ${config.theme==='dark'?'bg-black/30 border-white/10 focus:border-white/30 text-white':'bg-white/50 border-black/10 focus:border-blue-300 text-black shadow-inner'}`} />
+                              </div>
+                          )}
+                      </div>
+
+                      <div className="flex items-center gap-3 shrink-0 ml-4">
+                          {currentRoute !== 'settings' && currentRoute !== 'trash' && currentRoute !== 'map' && (
+                              <>
+                                  <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className={`text-sm px-2 py-2 rounded-lg outline-none cursor-pointer appearance-none bg-transparent font-medium ${currentRoute === 'vault' ? 'text-white hover:bg-white/10' : themeClasses.bgHover}`}>
+                                      <option className="text-black" value="upload_desc">⬇️ 上传最新</option><option className="text-black" value="upload_asc">⬆️ 上传最早</option><option className="text-black" value="capture_desc">📸 拍摄最新</option>
+                                  </select>
+                                  
+                                  <button onClick={() => {
+                                      if (isSelectionMode) setSelectedIds([]);
+                                      setIsSelectionMode(!isSelectionMode);
+                                  }} className={`px-4 py-2 text-sm font-bold rounded-lg border ${isSelectionMode ? 'bg-blue-600 border-blue-500 text-white shadow-md' : (currentRoute === 'vault' ? 'border-white/20 hover:bg-white/10' : themeClasses.border + ' ' + themeClasses.bgHover)}`}>
+                                      {isSelectionMode ? '取消选择' : '批量操作'}
+                                  </button>
+                              </>
+                          )}
+                          {currentRoute === 'trash' && (
+                              <button onClick={() => {
+                                  if (isSelectionMode) setSelectedIds([]);
+                                  setIsSelectionMode(!isSelectionMode);
+                              }} className={`px-4 py-2 text-sm font-bold rounded-lg border ${isSelectionMode ? 'bg-blue-600 border-blue-500 text-white shadow-md' : themeClasses.border + ' ' + themeClasses.bgHover}`}>
+                                  {isSelectionMode ? '取消选择' : '选择文件'}
+                              </button>
+                          )}
+                          {currentRoute !== 'settings' && currentRoute !== 'vault' && (
+                              <label className={`flex items-center gap-2 px-4 py-2 rounded-lg cursor-pointer transition-all text-sm font-bold shadow-md active:scale-95 ${config.theme === 'dark' ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-blue-500 hover:bg-blue-600 text-white'}`}>
+                                  {isUploading ? <div className="animate-spin rounded-full h-4 w-4 border-2 border-t-transparent border-white"></div> : <Icons.Upload />}<span className="hidden sm:inline">上传</span>
+                                  <input type="file" accept="image/*,video/*,.gif" multiple className="hidden" onChange={handleFileUpload} disabled={isUploading} />
+                              </label>
+                          )}
+                      </div>
+                  </header>
+
+                  <div className={`flex-1 relative w-full h-full ${currentRoute === 'vault' ? 'bg-transparent' : (config.theme === 'dark' ? 'bg-black/20' : 'bg-white/30')}`}>
+                      {currentRoute === 'settings' ? <SettingsView config={config} setConfig={setConfig} themeClasses={themeClasses} allPhotos={allPhotos} addToast={addToast} />
+                          : currentViewType === 'map' ? <MapView photos={filteredPhotos} onSelect={setSelectedPhoto} config={config} />
+                          : currentViewType === 'vault' ? <VaultView photos={filteredPhotos} onSelect={setSelectedPhoto} isSelectionMode={isSelectionMode} selectedIds={selectedIds} setSelectedIds={setSelectedIds} config={config} />
+                          : currentViewType === '3d' ? <Wall3DView photos={filteredPhotos} onSelect={setSelectedPhoto} config={config} />
+                          : <GridView photos={filteredPhotos} onSelect={setSelectedPhoto} themeClasses={themeClasses} isSelectionMode={isSelectionMode} selectedIds={selectedIds} setSelectedIds={setSelectedIds} currentRoute={currentRoute} config={config} />}
+                  </div>
+
+                  {isSelectionMode && selectedIds.length > 0 && (
+                      <div className={`absolute bottom-8 left-1/2 -translate-x-1/2 px-6 py-3 rounded-2xl shadow-2xl border flex items-center gap-6 z-50 ${currentRoute === 'vault' || config.theme === 'dark' ? 'bg-slate-900 text-white border-white/20' : 'bg-white text-slate-800 border-black/10'}`}>
+                          <span className="font-bold">{selectedIds.length} 项已选</span><div className={`w-px h-5 ${currentRoute === 'vault' || config.theme === 'dark' ? 'bg-white/20' : 'bg-black/10'}`}></div>
+                          {currentRoute === 'trash' ? (
+                              <><button onClick={() => handleRestore(selectedIds)} className="text-green-500 hover:text-green-400 font-medium flex gap-2 transition-colors"><Icons.TrashRestore/> 恢复</button>
+                                 <button onClick={() => handlePermanentDelete(selectedIds)} className="text-red-500 hover:text-red-400 font-medium flex gap-2 transition-colors"><Icons.Trash/> 彻底销毁</button></>
+                          ) : (
+                              <>
+                                 <div className="relative">
+                                     <button onClick={() => setShowBatchAlbumMenu(!showBatchAlbumMenu)} className="hover:text-blue-500 flex items-center gap-2 font-medium transition-colors">
+                                         <Icons.FolderPlus/> 移入...
+                                     </button>
+                                     {showBatchAlbumMenu && (
+                                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 w-48 bg-slate-800 border border-white/20 rounded-xl shadow-2xl py-2 z-50 animate-in slide-in-from-bottom-2">
+                                             <div className="px-3 pb-2 mb-2 border-b border-white/10 text-xs text-white/50 font-bold uppercase">选择目标文件夹</div>
+                                             {config.albums.map(album => (
+                                                 <button key={album.id} onClick={() => handleBatchAddToAlbum(album.id)} className="w-full text-left px-4 py-2 text-sm text-white hover:bg-blue-600 flex items-center justify-between transition-colors">
+                                                     <span className="truncate">{album.name}</span>
+                                                 </button>
+                                             ))}
+                                         </div>
+                                     )}
+                                 </div>
+                                 <button onClick={() => handleToggleVaultBatch(selectedIds)} className="hover:text-amber-500 flex gap-2 font-medium transition-colors"><Icons.Diamond/> 典藏</button>
+                                 <button onClick={() => handleTogglePrivacy(selectedIds)} className="hover:text-blue-500 flex gap-2 font-medium transition-colors"><Icons.Lock/> 加密</button>
+                                 <button onClick={() => handleTrash(selectedIds)} className="text-red-500 hover:text-red-400 font-medium flex gap-2 transition-colors"><Icons.Trash/> 删除</button>
+                              </>
+                          )}
+                      </div>
+                  )}
+              </main>
+
+              <BGMEngine config={config} />
+
+              {albumModalOpen && (
+                  <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+                      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setAlbumModalOpen(false)}></div>
+                      <div className={`relative w-full max-w-sm p-6 rounded-2xl shadow-2xl ${config.theme === 'dark' ? 'bg-slate-800' : 'bg-white'}`}>
+                          <h3 className="text-xl font-bold mb-4">新建文件夹</h3>
+                          <input type="text" autoFocus value={newAlbumName} onChange={e => setNewAlbumName(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleCreateAlbum()} className={`w-full px-4 py-2 rounded-lg border mb-4 outline-none ${config.theme === 'dark' ? 'bg-slate-900 border-white/20' : 'bg-slate-50 border-black/20'}`} />
+                          <div className="flex justify-end gap-2">
+                              <button onClick={() => setAlbumModalOpen(false)} className="px-4 py-2 rounded-lg font-medium opacity-70 hover:bg-black/10">取消</button>
+                              <button onClick={handleCreateAlbum} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium">创建</button>
+                          </div>
+                      </div>
+                  </div>
+              )}
+
+              {selectedPhoto && (
+                  <PhotoDetailModal photo={selectedPhoto} onClose={() => setSelectedPhoto(null)} themeClasses={themeClasses}
+                      onToggleFavorite={() => handleUpdateMetaField(selectedPhoto, 'isFavorite')}
+                      onToggleVault={() => handleUpdateMetaField(selectedPhoto, 'inVault')}
+                      onTrash={() => { handleTrash([selectedPhoto.id]); setSelectedPhoto(null); }}
+                      onDelete={() => { handlePermanentDelete([selectedPhoto.id]); setSelectedPhoto(null); }}
+                      onToggleAlbum={(albumId) => handleUpdateMetaField(selectedPhoto, 'albums', albumId)}
+                      onUpdateText={(text) => handleUpdateMetaField(selectedPhoto, 'text', text)}
+                      onUpdateLocation={(latlng) => handleUpdateMetaField(selectedPhoto, 'location', latlng)}
+                      onNavigate={handleNavigatePhoto} config={config} currentRoute={currentRoute} addToast={addToast}
+                  />
+              )}
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
